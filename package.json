@@ -3,17 +3,19 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "postinstall": "npm --prefix bridge install --no-audit --no-fund",
-    "dev": "npm --prefix bridge run dev",
-    "start": "npm --prefix bridge run start",
-    "install:bridge": "npm --prefix bridge install --no-audit --no-fund",
-    "build": "npm --prefix bridge run build",
-    "check:public": "npm --prefix bridge run check:public",
-    "smoke": "npm --prefix bridge run smoke",
-    "ui:smoke": "npm --prefix bridge run ui:smoke",
+    "postinstall": "npm.cmd --prefix bridge install --no-audit --no-fund",
+    "dev": "npm.cmd --prefix bridge run dev",
+    "start": "npm.cmd --prefix bridge run start",
+    "install:bridge": "npm.cmd --prefix bridge install --no-audit --no-fund",
+    "build": "npm.cmd --prefix bridge run build",
+    "check:public": "npm.cmd --prefix bridge run check:public",
+    "smoke": "npm.cmd --prefix bridge run smoke",
+    "mcp:smoke": "npm.cmd --prefix bridge run mcp:smoke",
+    "ui:smoke": "npm.cmd --prefix bridge run ui:smoke",
     "repair-install": "powershell -ExecutionPolicy Bypass -File scripts/windows/repair-install.ps1",
     "install-app": "powershell -ExecutionPolicy Bypass -File scripts/windows/install.ps1",
     "start-app": "powershell -ExecutionPolicy Bypass -File scripts/windows/start-bridge.ps1",
-    "update-app": "powershell -ExecutionPolicy Bypass -File scripts/windows/update.ps1"
+    "update-app": "powershell -ExecutionPolicy Bypass -File scripts/windows/update.ps1",
+    "release:zip": "powershell -ExecutionPolicy Bypass -File scripts/windows/create-release-zip.ps1"
   }
 }

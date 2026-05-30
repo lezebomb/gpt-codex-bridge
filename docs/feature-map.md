@@ -3,7 +3,7 @@
 ## ChatGPT Web side
 
 - Project orchestration and role routing.
-- Reading project context through bridge Actions.
+- Reading project context through ChatGPT Custom MCP tools.
 - Creating context packs.
 - Writing small full-file patch proposals.
 - Comparing ChatGPT-authored patches against Codex results.

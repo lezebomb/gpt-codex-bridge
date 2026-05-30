@@ -113,7 +113,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $bridgeDir "package.json"))) {
 }
 
 Push-Location $bridgeDir
-npm.cmd install --no-audit --no-fund
+$npmCache = Join-Path $bridgeDir ".npm-cache"
+New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
+npm.cmd install --no-audit --no-fund --cache $npmCache
 npm.cmd run build
 Pop-Location
 
@@ -177,6 +179,6 @@ Write-Host "ChatGPT Codex Bridge installed."
 Write-Host "Install dir: $InstallDir"
 Write-Host "Config: $configPath"
 Write-Host "Dashboard: http://localhost:$Port/dashboard/"
-Write-Host "Token, execution mode, and access mode are managed in Dashboard > Settings."
+Write-Host "Pairing code, execution mode, and access mode are managed in the dashboard."
 Write-Host ""
 Write-Host "Use the Start Menu shortcut: Start ChatGPT Codex Bridge"

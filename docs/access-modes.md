@@ -1,6 +1,6 @@
 # 权限模式
 
-控制台提供四种权限模式，可在“设置”或“权限模式”页面中切换。
+控制台提供四种权限模式，可在 dashboard 的“高级”页面中切换。
 
 | 界面名称 | 内部值 | 适用场景 | 行为 |
 | --- | --- | --- | --- |
@@ -14,9 +14,9 @@
 ## 在界面中切换
 
 1. 打开 dashboard。
-2. 进入“设置”或“权限模式”。
+2. 进入“高级”。
 3. 选择目标模式。
-4. 点击“保存设置”或模式卡片。
+4. 点击“保存”。
 
 完全访问需要输入：
 
@@ -26,7 +26,7 @@
 
 ## 用 PowerShell API 切换
 
-先从本机 bootstrap 获取当前令牌：
+先从本机 bootstrap 获取当前本地配对码：
 
 ```powershell
 $bootstrap = Invoke-RestMethod -Uri http://localhost:8787/bootstrap
@@ -38,7 +38,7 @@ $bootstrap = Invoke-RestMethod -Uri http://localhost:8787/bootstrap
 Invoke-RestMethod `
   -Method Post `
   -Uri http://localhost:8787/config/access-mode `
-  -Headers @{ Authorization = "Bearer $($bootstrap.token)" } `
+  -Headers @{ "x-api-key" = $bootstrap.token } `
   -ContentType "application/json" `
   -Body '{"permissionMode":"manual_review"}'
 ```
@@ -49,7 +49,7 @@ Invoke-RestMethod `
 Invoke-RestMethod `
   -Method Post `
   -Uri http://localhost:8787/config/access-mode `
-  -Headers @{ Authorization = "Bearer $($bootstrap.token)" } `
+  -Headers @{ "x-api-key" = $bootstrap.token } `
   -ContentType "application/json" `
   -Body '{"permissionMode":"full_access","confirmFullAccess":"我已理解风险"}'
 ```

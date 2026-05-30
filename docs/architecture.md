@@ -1,50 +1,47 @@
-# Architecture
+# 架构
 
-## Target workflow
+## 目标工作流
 
 ```text
-User in ChatGPT web
-  -> Project Orchestrator GPT
-  -> role protocol routing
-  -> Bridge API / ChatGPT Action / future Apps SDK MCP server
-  -> local Codex SDK / CLI
-  -> local repo in isolated branch/worktree
-  -> diff, logs, tests, screenshots
-  -> ChatGPT review and next iteration
+ChatGPT 网页端主控 GPT
+  -> 自定义 MCP
+  -> 本地 Bridge MCP Server
+  -> 已注册本地项目 / Codex CLI / Codex App Server / 日志 / 审批
+  -> diff、测试结果、截图、修复方案
+  -> 回到 ChatGPT 主控 GPT 给用户决策
 ```
 
-## Components
+## 组件
 
-### 1. Project Orchestrator GPT
+### 1. 主控 GPT
 
-Owns conversation, scope control, role selection, planning, Codex job creation, result review, and user approval gates.
+负责需求澄清、项目选择、任务拆分、调用 MCP tools、审查结果和向用户解释下一步。
 
-### 2. Role protocols
+### 2. 本地 Bridge
 
-Markdown protocols that constrain each role to a narrow job. They prevent the main GPT from becoming a vague all-in-one persona.
+Node/Express 服务，默认端口 `8787`。它同时提供：
 
-### 3. Codex skills
+- `/mcp`：ChatGPT 自定义 MCP 主入口。
+- REST API：dashboard、兼容层和本机调试使用。
+- dashboard：本地连接向导、项目选择、审批、日志、能力中心。
 
-Reusable `SKILL.md` packages installed into Codex so Codex can consistently follow task-specific workflows.
+### 3. 项目白名单
 
-### 4. Local bridge
+Bridge 只读写已注册项目目录内的相对路径。文件读取、补丁、Codex 任务都必须绑定项目。
 
-A local server exposing a small task API. The GPT calls it through Actions or an Apps SDK/MCP integration. The bridge controls project allowlists, jobs, logs, and Codex execution mode.
+### 4. 权限模式
 
-### 5. MCP servers
+- `read_only`：只读检查。
+- `manual_review`：默认推荐，关键动作人工确认。
+- `auto_review`：低风险任务可自动运行。
+- `full_access`：危险模式，必须显式输入确认语。
 
-MCP is used for local repo/file/Git/browser/docs/GitHub tooling. Do not enable all toolsets by default.
+### 5. Codex 执行
 
-## Modes
+- `dry-run`：默认可用，不真实执行 Codex。
+- `cli`：调用本机 `codex` 命令。
+- `app-server`：保留对 Codex App Server 的集成入口。
 
-### Mode A: Actions MVP
+## 兼容层
 
-Use a Custom GPT Action with `bridge/openapi/action-schema.yaml`. This is simplest and enough for a demo.
-
-### Mode B: Apps SDK / MCP product route
-
-Use a ChatGPT App with MCP tools and UI widgets. This is the intended long-term route for a public product.
-
-### Mode C: Manual specialist GPTs
-
-Specialist GPTs can manually read/write shared task records through the same bridge. This gives specialization without unsupported GPT-to-GPT calls.
+`bridge\openapi\action-schema.yaml` 保留作 legacy OpenAPI Actions 兼容文件。新主线是自定义 MCP。

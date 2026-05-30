@@ -1,6 +1,9 @@
 import express, { Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { nanoid } from "nanoid";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -38,6 +41,112 @@ const repoRoot = path.resolve(ROOT, "..");
 
 const ROLE_DIR = path.resolve(repoRoot, "roles");
 const SKILL_DIR = path.resolve(repoRoot, ".agents", "skills");
+
+type McpPluginStatus = "built-in" | "available" | "disabled" | "not_implemented";
+type McpPlugin = {
+  id: string;
+  name: string;
+  status: McpPluginStatus;
+  risk: "low" | "medium" | "high";
+  canReadFiles: boolean;
+  canWriteFiles: boolean;
+  canAccessNetwork: boolean;
+  description: string;
+  notes?: string;
+};
+
+const MCP_PLUGINS: McpPlugin[] = [
+  {
+    id: "filesystem",
+    name: "Filesystem",
+    status: "built-in",
+    risk: "medium",
+    canReadFiles: true,
+    canWriteFiles: true,
+    canAccessNetwork: false,
+    description: "Project-scoped file browsing, reading, context packs, and web patch drafts. File writes stay inside registered project roots."
+  },
+  {
+    id: "git",
+    name: "Git",
+    status: "built-in",
+    risk: "medium",
+    canReadFiles: true,
+    canWriteFiles: true,
+    canAccessNetwork: false,
+    description: "Read-only git status and diff are low risk. Branch, commit, and PR helpers remain guarded by permission mode."
+  },
+  {
+    id: "codex",
+    name: "Codex CLI / App Server",
+    status: "built-in",
+    risk: "high",
+    canReadFiles: true,
+    canWriteFiles: true,
+    canAccessNetwork: true,
+    description: "Creates dry-run, CLI, or app-server jobs. CLI/app-server execution uses the current local Codex login state."
+  },
+  {
+    id: "playwright",
+    name: "Playwright",
+    status: "available",
+    risk: "medium",
+    canReadFiles: true,
+    canWriteFiles: true,
+    canAccessNetwork: true,
+    description: "UI screenshot and browser smoke-test jobs. The Bridge creates jobs; the local runner performs browser work."
+  },
+  {
+    id: "context7",
+    name: "Context7",
+    status: "not_implemented",
+    risk: "medium",
+    canReadFiles: false,
+    canWriteFiles: false,
+    canAccessNetwork: true,
+    description: "Library documentation lookup is planned as a managed plugin. It is listed for planning and is not enabled automatically."
+  },
+  {
+    id: "fetch",
+    name: "Fetch",
+    status: "not_implemented",
+    risk: "medium",
+    canReadFiles: false,
+    canWriteFiles: false,
+    canAccessNetwork: true,
+    description: "Web document fetch is planned. Network access must be explicitly enabled before use."
+  },
+  {
+    id: "github",
+    name: "GitHub",
+    status: "available",
+    risk: "high",
+    canReadFiles: true,
+    canWriteFiles: true,
+    canAccessNetwork: true,
+    description: "GitHub CLI helpers can create PRs when gh is installed and authenticated. They are not enabled for silent writes."
+  },
+  {
+    id: "memory",
+    name: "Project Memory",
+    status: "not_implemented",
+    risk: "medium",
+    canReadFiles: true,
+    canWriteFiles: true,
+    canAccessNetwork: false,
+    description: "Long-term project memory is planned but not implemented."
+  },
+  {
+    id: "sequential-thinking",
+    name: "Sequential Thinking",
+    status: "not_implemented",
+    risk: "low",
+    canReadFiles: false,
+    canWriteFiles: false,
+    canAccessNetwork: false,
+    description: "Planning helper is listed for future managed plugin support."
+  }
+];
 
 const jobStatus = z.enum([
   "draft",
@@ -81,11 +190,16 @@ type BridgeSettings = {
 type LogEntry = {
   id: string;
   at: string;
+  timestamp?: string;
   level: "debug" | "info" | "warn" | "error";
   scope: string;
+  source?: "dashboard" | "mcp" | "rest" | "codex" | "plugin" | "auth" | "config" | "http" | "system" | string;
+  action?: string;
   message: string;
   requestId?: string;
+  projectId?: string;
   data?: unknown;
+  details?: unknown;
 };
 
 type Project = {
@@ -409,7 +523,23 @@ function logFileForDate(date = new Date()): string {
 
 function writeLog(level: LogEntry["level"], scope: string, message: string, data?: unknown, requestId?: string): LogEntry {
   fs.mkdirSync(path.join(dataDir, "logs"), { recursive: true });
-  const entry: LogEntry = { id: nanoid(10), at: now(), level, scope, message, requestId, data: data === undefined ? undefined : compactForLog(data, 5000) };
+  const timestamp = now();
+  const compacted = data === undefined ? undefined : compactForLog(data, 5000);
+  const projectId = compacted && typeof compacted === "object" && "projectId" in compacted ? String((compacted as { projectId?: unknown }).projectId || "") : undefined;
+  const entry: LogEntry = {
+    id: nanoid(10),
+    at: timestamp,
+    timestamp,
+    level,
+    scope,
+    source: scope.includes(".") ? scope.split(".")[0] : scope,
+    action: scope,
+    message,
+    requestId,
+    projectId: projectId || undefined,
+    data: compacted,
+    details: compacted
+  };
   fs.appendFileSync(logFileForDate(), `${JSON.stringify(entry)}\n`, "utf8");
   return entry;
 }
@@ -453,12 +583,16 @@ function assertMutationsAllowed(settings: BridgeSettings, action: string): void 
 function auth(req: Request, res: Response, next: NextFunction): void {
   if (req.path === "/health" || req.path === "/bootstrap") return next();
   const header = req.header("authorization") || "";
-  if (header !== `Bearer ${currentToken()}`) {
+  const apiKey = req.header("x-api-key") || "";
+  const expected = currentToken();
+  const bearer = header.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
+  const supplied = bearer || apiKey.trim();
+  if (supplied !== expected) {
     const requestId = (req as Request & { requestId?: string }).requestId || nanoid(8);
-    writeLog("warn", "auth", "Unauthorized request", { method: req.method, path: req.path }, requestId);
+    writeLog("warn", "auth", "Unauthorized request", { method: req.method, path: req.path, hasAuthorization: Boolean(header), hasApiKey: Boolean(apiKey) }, requestId);
     res.status(401).json({
       error: "unauthorized",
-      message: "Bearer token is missing or invalid",
+      message: "Local pairing code is missing or invalid",
       requestId,
       logHint: "Open Dashboard > Logs or call GET /logs?level=warn"
     });
@@ -478,6 +612,72 @@ function safeProjectPath(inputPath: string): string {
   const stat = fs.statSync(resolved);
   if (!stat.isDirectory()) throw new Error("project path is not a directory");
   return resolved;
+}
+
+function uniqueByPath<T extends { path: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = path.resolve(item.path).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function safeDirectoryInfo(dirPath: string, label?: string) {
+  const resolved = path.resolve(expandHome(dirPath));
+  return {
+    name: label || (path.basename(resolved) || resolved),
+    path: resolved,
+    exists: fs.existsSync(resolved),
+    type: "dir" as const
+  };
+}
+
+function listFilesystemRoots() {
+  const home = os.homedir();
+  const roots = [
+    safeDirectoryInfo(home, "Home"),
+    safeDirectoryInfo(path.join(home, "Desktop"), "Desktop"),
+    safeDirectoryInfo(path.join(home, "Documents"), "Documents"),
+    safeDirectoryInfo(path.resolve(ROOT, ".."), "Repository")
+  ];
+
+  if (process.platform === "win32") {
+    for (let code = 67; code <= 90; code += 1) {
+      const drive = `${String.fromCharCode(code)}:\\`;
+      if (fs.existsSync(drive)) roots.push(safeDirectoryInfo(drive, drive));
+    }
+  } else {
+    roots.push(safeDirectoryInfo("/", "/"));
+  }
+
+  return uniqueByPath(roots).filter((root) => root.exists);
+}
+
+function isSensitiveDirectory(dirPath: string): boolean {
+  const resolved = path.resolve(dirPath).toLowerCase();
+  const blockedNames = ["windows\\system32", "$recycle.bin", "system volume information", "appdata\\local\\temp"];
+  return blockedNames.some((name) => resolved.includes(name.toLowerCase()));
+}
+
+function listBrowsableDirectories(inputPath?: string) {
+  if (!inputPath) {
+    return { currentPath: "", parentPath: null, roots: listFilesystemRoots(), directories: [] as Array<{ name: string; path: string; type: "dir" }> };
+  }
+  const resolved = safeProjectPath(inputPath);
+  if (isSensitiveDirectory(resolved)) throw new Error("this system directory is hidden by default");
+  const entries = fs
+    .readdirSync(resolved, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !IGNORED_DIRS.has(entry.name))
+    .map((entry) => {
+      const fullPath = path.join(resolved, entry.name);
+      return { name: entry.name, path: fullPath, type: "dir" as const };
+    })
+    .filter((entry) => !isSensitiveDirectory(entry.path))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const parent = path.dirname(resolved);
+  return { currentPath: resolved, parentPath: parent === resolved ? null : parent, roots: [] as ReturnType<typeof listFilesystemRoots>, directories: entries };
 }
 
 const IGNORED_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", "coverage", ".turbo", ".cache"]);
@@ -567,6 +767,19 @@ function validatePatch(project: Project, changes: WebPatchChange[]) {
       throw new Error(`file content too large for ${normalized}`);
     }
     return { ...change, filePath: normalized };
+  });
+}
+
+function isLowRiskPatch(changes: WebPatchChange[]): boolean {
+  if (changes.length > 3) return false;
+  const allowedPrefixes = ["src/", "public/", "docs/", "README", "QUICKSTART"];
+  const riskyNames = ["package.json", "package-lock.json", ".env", "secret", "token", "key", "credential"];
+  return changes.every((change) => {
+    const normalized = change.filePath.replace(/\\/g, "/");
+    const lower = normalized.toLowerCase();
+    const allowed = allowedPrefixes.some((prefix) => normalized === prefix || normalized.startsWith(prefix));
+    const risky = riskyNames.some((name) => lower.includes(name.toLowerCase()));
+    return allowed && !risky && Buffer.byteLength(change.content, "utf8") <= 120_000;
   });
 }
 
@@ -1192,6 +1405,491 @@ async function runJob(jobId: string): Promise<Job> {
   }
 }
 
+type JsonObject = Record<string, unknown>;
+
+function mcpJson(data: JsonObject, message?: string): CallToolResult {
+  const body = message ? { ...data, message } : data;
+  return {
+    content: [{ type: "text", text: JSON.stringify(body, null, 2) }],
+    structuredContent: body
+  };
+}
+
+function mcpError(toolName: string, requestId: string, error: unknown): CallToolResult {
+  const message = error instanceof Error ? error.message : String(error);
+  const body = {
+    ok: false,
+    tool: toolName,
+    requestId,
+    error: message,
+    logHint: "Open Dashboard > Logs, or call get_latest_logs with this requestId.",
+    repair: {
+      canCreateRepair: true,
+      nextTool: "create_repair_proposal"
+    }
+  };
+  return {
+    isError: true,
+    content: [{ type: "text", text: JSON.stringify(body, null, 2) }],
+    structuredContent: body
+  };
+}
+
+function projectOrThrow(state: State, projectId?: string): Project {
+  const project = findProjectByOptionalId(state, projectId);
+  if (!project) throw new Error(projectId ? "project not found" : "no project registered yet");
+  return project;
+}
+
+function mcpPluginSummary() {
+  return {
+    total: MCP_PLUGINS.length,
+    builtIn: MCP_PLUGINS.filter((plugin) => plugin.status === "built-in").length,
+    available: MCP_PLUGINS.filter((plugin) => plugin.status === "available").length,
+    notImplemented: MCP_PLUGINS.filter((plugin) => plugin.status === "not_implemented").length,
+    plugins: MCP_PLUGINS.map((plugin) => ({
+      id: plugin.id,
+      status: plugin.status,
+      risk: plugin.risk,
+      canReadFiles: plugin.canReadFiles,
+      canWriteFiles: plugin.canWriteFiles,
+      canAccessNetwork: plugin.canAccessNetwork
+    }))
+  };
+}
+
+function createProjectFromPath(input: { path: string; displayName?: string; allowShell?: boolean }) {
+  const resolvedPath = safeProjectPath(input.path);
+  const state = loadState();
+  const existing = state.projects.find((project) => path.resolve(project.path).toLowerCase() === resolvedPath.toLowerCase());
+  if (existing) return { project: existing, created: false };
+  const project: Project = {
+    id: nanoid(10),
+    name: input.displayName || path.basename(resolvedPath) || resolvedPath,
+    path: resolvedPath,
+    allowShell: Boolean(input.allowShell),
+    createdAt: now(),
+    updatedAt: now()
+  };
+  state.projects.push(project);
+  saveState(state);
+  return { project, created: true };
+}
+
+function createPatchDraft(input: { projectId: string; title: string; rationale?: string; changes: WebPatchChange[] }, requestId?: string) {
+  const state = loadState();
+  const project = state.projects.find((p) => p.id === input.projectId);
+  if (!project) throw new Error("project not found");
+  const changes = validatePatch(project, input.changes);
+  const patch: WebPatch = {
+    id: nanoid(10),
+    projectId: input.projectId,
+    title: input.title,
+    rationale: input.rationale || "",
+    status: "needs_approval",
+    changes,
+    createdBy: "chatgpt-web",
+    events: [{ at: now(), type: "web_patch_created", message: "Created by MCP. Review before applying unless permission mode allows auto-apply." }],
+    createdAt: now(),
+    updatedAt: now()
+  };
+  state.webPatches.push(patch);
+  saveState(state);
+  writeLog("info", "mcp.web_patch", "MCP created web patch draft", { patchId: patch.id, projectId: project.id, files: patch.changes.map((change) => change.filePath) }, requestId);
+  return patch;
+}
+
+function requestApplyPatch(patchId: string, requestId?: string) {
+  const state = loadState();
+  const patch = state.webPatches.find((p) => p.id === patchId);
+  if (!patch) throw new Error("patch not found");
+  const project = state.projects.find((p) => p.id === patch.projectId);
+  if (!project) throw new Error("project not found");
+  if (patch.status !== "needs_approval") throw new Error(`patch cannot be applied from status ${patch.status}`);
+
+  const mode = state.settings.permissionMode;
+  if (mode === "read_only") {
+    return { applied: false, status: "blocked", reason: "read_only mode blocks file writes", patch };
+  }
+  if (mode === "manual_review") {
+    writeLog("warn", "mcp.web_patch", "Patch apply requires dashboard approval", { patchId, projectId: project.id, permissionMode: mode }, requestId);
+    return { applied: false, status: "needs_dashboard_approval", reason: "manual_review requires the user to approve Apply in Dashboard > Approvals/Advanced.", patch };
+  }
+  if (mode === "auto_review" && !isLowRiskPatch(patch.changes)) {
+    writeLog("warn", "mcp.web_patch", "Patch apply deferred because patch is not low risk", { patchId, projectId: project.id }, requestId);
+    return { applied: false, status: "needs_dashboard_approval", reason: "auto_review only auto-applies low-risk patches; review this patch in Dashboard.", patch };
+  }
+
+  if (!state.settings.allowWebPatchApply) throw new Error("web patch apply is disabled by the current permission mode");
+  const result = applyWebPatch(patch, project);
+  patch.status = "applied";
+  patch.appliedAt = now();
+  patch.updatedAt = now();
+  patch.events.push({ at: now(), type: "web_patch_applied", message: "Applied by MCP permission policy.", data: result });
+  saveState(state);
+  writeLog("warn", "mcp.web_patch", "MCP applied web patch", { patchId, projectId: project.id, permissionMode: mode, changedFiles: patch.changes.map((change) => change.filePath) }, requestId);
+  return { applied: true, status: "applied", patch, result };
+}
+
+function requestRevertPatch(patchId: string, requestId?: string) {
+  const state = loadState();
+  const patch = state.webPatches.find((p) => p.id === patchId);
+  if (!patch) throw new Error("patch not found");
+  const project = state.projects.find((p) => p.id === patch.projectId);
+  if (!project) throw new Error("project not found");
+  if (patch.status !== "applied") throw new Error(`patch cannot be reverted from status ${patch.status}`);
+  const mode = state.settings.permissionMode;
+  if (mode !== "full_access") {
+    writeLog("warn", "mcp.web_patch", "Patch revert requires dashboard approval", { patchId, projectId: project.id, permissionMode: mode }, requestId);
+    return { reverted: false, status: mode === "read_only" ? "blocked" : "needs_dashboard_approval", reason: "revert modifies files; approve it from Dashboard unless full_access is enabled.", patch };
+  }
+  const result = revertWebPatch(patch, project);
+  patch.status = "reverted";
+  patch.updatedAt = now();
+  patch.events.push({ at: now(), type: "web_patch_reverted", message: "Reverted by MCP in full_access mode.", data: result });
+  saveState(state);
+  writeLog("warn", "mcp.web_patch", "MCP reverted web patch", { patchId, projectId: project.id }, requestId);
+  return { reverted: true, status: "reverted", patch, result };
+}
+
+async function createCodexJobFromInput(input: {
+  projectId: string;
+  title: string;
+  task: string;
+  roles?: string[];
+  safetyLevel?: number;
+  executionPreference?: ExecutionMode | "auto";
+  runImmediately?: boolean;
+}, requestId?: string) {
+  const state = loadState();
+  const project = state.projects.find((p) => p.id === input.projectId);
+  if (!project) throw new Error("project not found");
+  if (input.executionPreference && input.executionPreference !== "auto") {
+    const previous = loadRuntime();
+    saveRuntime({ ...previous, execution: input.executionPreference, updatedAt: now() });
+  }
+  const current = loadState();
+  const settings = current.settings;
+  const safetyLevel = Math.max(0, Math.min(5, Number(input.safetyLevel ?? 1)));
+  const requiresApproval = requiresApprovalForJob(safetyLevel, settings);
+  const job: Job = {
+    id: nanoid(10),
+    projectId: input.projectId,
+    title: input.title,
+    task: input.task,
+    roles: input.roles || [],
+    status: requiresApproval ? "needs_approval" : "queued",
+    safetyLevel,
+    requiresApproval,
+    codexPrompt: buildCodexPrompt({ title: input.title, task: input.task, roles: input.roles || [], safetyLevel }, project),
+    events: [{ at: now(), type: "job_created_from_mcp", message: requiresApproval ? "Waiting for dashboard approval." : "Queued by MCP." }],
+    createdAt: now(),
+    updatedAt: now()
+  };
+  current.jobs.push(job);
+  saveState(current);
+  writeLog("info", "mcp.codex", "MCP created Codex job", { jobId: job.id, projectId: project.id, safetyLevel, requiresApproval, execution: currentExecution() }, requestId);
+  if (input.runImmediately && !requiresApproval) {
+    return runJob(job.id);
+  }
+  return job;
+}
+
+function createUiScreenshotJob(input: { projectId: string; devServerUrl?: string; route?: string; notes?: string; runImmediately?: boolean }, requestId?: string) {
+  const state = loadState();
+  const project = state.projects.find((p) => p.id === input.projectId);
+  if (!project) throw new Error("project not found");
+  const targetUrl = [input.devServerUrl?.replace(/\/$/, ""), input.route?.replace(/^\//, "")].filter(Boolean).join("/");
+  const task = [
+    "Create a focused UI screenshot review for this project.",
+    targetUrl ? `Target URL: ${targetUrl}` : "No dev server URL was provided. If the app is not running, report the exact startup step instead of guessing.",
+    input.notes ? `Notes: ${input.notes}` : "",
+    "",
+    "Use Playwright when available. Save artifacts under .chatgpt-codex/screenshots. Return concise findings and minimal fixes."
+  ].filter(Boolean).join("\n");
+  const requiresApproval = requiresApprovalForJob(2, state.settings);
+  const job: Job = {
+    id: nanoid(10),
+    projectId: project.id,
+    title: "UI screenshot review",
+    task,
+    roles: ["ui_ux_designer", "frontend_engineer", "qa_reviewer"],
+    status: requiresApproval ? "needs_approval" : "queued",
+    safetyLevel: 2,
+    requiresApproval,
+    codexPrompt: buildCodexPrompt({ title: "UI screenshot review", task, roles: ["ui_ux_designer", "frontend_engineer", "qa_reviewer"], safetyLevel: 2 }, project),
+    events: [{ at: now(), type: "ui_screenshot_review_job_created", message: "Created by MCP." }],
+    createdAt: now(),
+    updatedAt: now()
+  };
+  state.jobs.push(job);
+  saveState(state);
+  writeLog("info", "mcp.ui", "MCP created UI screenshot job", { jobId: job.id, projectId: project.id, targetUrl }, requestId);
+  return job;
+}
+
+function analyzeLogEntry(log: LogEntry) {
+  const detailsText = typeof log.details === "string" ? log.details : JSON.stringify(log.details || log.data || {});
+  const message = log.message || "Unknown error";
+  const likelyCause = message.toLowerCase().includes("unauthorized")
+    ? "The local pairing code is missing or does not match the Bridge runtime."
+    : message.toLowerCase().includes("project not found")
+      ? "The selected project id is not registered or the project was removed."
+      : message.toLowerCase().includes("path")
+        ? "The requested path is missing, outside the project root, or blocked by safety rules."
+        : "Review the endpoint/tool details and reproduce with the same requestId.";
+  return {
+    requestId: log.requestId,
+    logId: log.id,
+    endpointOrTool: log.scope,
+    errorSummary: message,
+    likelyCause,
+    evidence: detailsText.slice(0, 1500),
+    suggestedNextActions: [
+      "Open Dashboard > Logs and search this requestId.",
+      "If it is a configuration issue, fix Setup/Project first.",
+      "If code changes are required, create a repair proposal and wait for user approval."
+    ],
+    canCreateRepair: true
+  };
+}
+
+function createRepairProposalFromInput(input: {
+  projectId?: string;
+  sourceRequestId?: string;
+  sourceLogId?: string;
+  sourceKind?: "http_error" | "job_failure" | "manual";
+  errorSummary: string;
+  conciseDiagnosis: string;
+  solution: string;
+  executionPlan: string[];
+  codexTask?: string;
+  safetyLevel?: number;
+}) {
+  const state = loadState();
+  const project = findProjectByOptionalId(state, input.projectId);
+  if (input.projectId && !project) throw new Error("project not found");
+  const repair: RepairProposal = {
+    id: nanoid(10),
+    projectId: project?.id,
+    sourceRequestId: input.sourceRequestId,
+    sourceLogId: input.sourceLogId,
+    sourceKind: input.sourceKind || "manual",
+    errorSummary: input.errorSummary,
+    conciseDiagnosis: input.conciseDiagnosis,
+    solution: input.solution,
+    executionPlan: input.executionPlan,
+    codexTask: input.codexTask,
+    safetyLevel: Math.max(1, Math.min(5, Number(input.safetyLevel || 2))),
+    status: "needs_approval",
+    createdBy: "chatgpt-web",
+    events: [{ at: now(), type: "repair_created", message: "Created by MCP. Waiting for user approval." }],
+    createdAt: now(),
+    updatedAt: now()
+  };
+  state.repairProposals.push(repair);
+  saveState(state);
+  return repair;
+}
+
+function registerMcpTool(server: McpServer, name: string, description: string, inputSchema: JsonObject, handler: (args: any, requestId: string) => Promise<JsonObject> | JsonObject) {
+  (server.registerTool as any)(
+    name,
+    { title: name, description, inputSchema },
+    async (args: any): Promise<CallToolResult> => {
+      const requestId = nanoid(8);
+      try {
+        writeLog("info", "mcp.tool", `MCP tool called: ${name}`, { tool: name, args: compactForLog(args, 2000) }, requestId);
+        const result = await handler(args || {}, requestId);
+        writeLog("info", "mcp.tool", `MCP tool completed: ${name}`, { tool: name }, requestId);
+        return mcpJson({ ok: true, requestId, ...result });
+      } catch (error) {
+        writeLog("error", "mcp.error", `MCP tool failed: ${name}`, { tool: name, error: error instanceof Error ? error.message : String(error), args: compactForLog(args, 2000) }, requestId);
+        return mcpError(name, requestId, error);
+      }
+    }
+  );
+}
+
+function createMcpServer(): McpServer {
+  const server = new McpServer(
+    { name: "chatgpt-codex-local-bridge", version: VERSION },
+    {
+      instructions: "Use this Bridge to inspect registered local projects, create bounded web patches, request Codex jobs, read logs, and create repair proposals. Never assume project structure before reading it. Dangerous writes must respect the current permission mode."
+    }
+  );
+
+  registerMcpTool(server, "get_bridge_status", "Check Bridge status, modes, project count, recent errors, and managed MCP plugin summary.", {}, () => {
+    const state = loadState();
+    const errors = readRecentLogs(50, "error");
+    return {
+      bridgeVersion: VERSION,
+      executionMode: currentExecution(),
+      permissionMode: state.settings.permissionMode,
+      projectsCount: state.projects.length,
+      activeProjectId: state.projects[0]?.id || null,
+      recentErrorCount: errors.length,
+      mcpPluginsSummary: mcpPluginSummary()
+    };
+  });
+
+  registerMcpTool(server, "get_setup_guide", "Return a concise Windows and ChatGPT Custom MCP setup guide for this local Bridge.", {}, () => ({
+    serverUrlExample: "https://bridge.your-domain.com/mcp",
+    localDashboardUrl: `http://localhost:${PORT}/dashboard/`,
+    localMcpUrl: `http://localhost:${PORT}/mcp`,
+    authModeRecommendation: "Access token / API key",
+    pairingCodeLabel: "Local pairing code",
+    cloudflareTunnelGuideShort: "Expose http://localhost:8787 as https://bridge.your-domain.com, then configure ChatGPT Custom MCP with https://bridge.your-domain.com/mcp.",
+    windowsPowerShellQuickStart: [
+      "cd .\\bridge",
+      "npm.cmd install --no-audit --no-fund",
+      "npm.cmd run dev",
+      "Open http://localhost:8787/dashboard/ and copy the Local pairing code from Setup."
+    ]
+  }));
+
+  registerMcpTool(server, "list_projects", "List project roots registered in the Bridge allowlist.", {}, () => ({ projects: loadState().projects }));
+
+  registerMcpTool(server, "browse_folders", "Browse local folders safely for file-manager style project selection. Only returns directories.", { path: z.string().optional() }, (args) => listBrowsableDirectories(args.path));
+
+  registerMcpTool(server, "select_project", "Register the selected local folder as a Bridge project allowlist root.", { path: z.string(), displayName: z.string().optional(), allowShell: z.boolean().optional() }, (args, requestId) => {
+    const result = createProjectFromPath(args);
+    writeLog("info", "mcp.project", "MCP selected project", { projectId: result.project.id, path: result.project.path, created: result.created }, requestId);
+    return { project: result.project, created: result.created, projectId: result.project.id };
+  });
+
+  registerMcpTool(server, "inspect_project", "Inspect a registered project: package summary, README preview, git status, tree summary, and likely stack.", { projectId: z.string().optional() }, (args) => {
+    const state = loadState();
+    return { project: inspectProject(projectOrThrow(state, args.projectId)) };
+  });
+
+  registerMcpTool(server, "read_file", "Read a file inside a registered project root. Path traversal and absolute paths are blocked.", { projectId: z.string(), filePath: z.string() }, (args) => {
+    const state = loadState();
+    const project = projectOrThrow(state, args.projectId);
+    return { file: readProjectFile(project, args.filePath) };
+  });
+
+  registerMcpTool(server, "create_context_pack", "Create a markdown context pack for ChatGPT Web using selected files, tree, git status, and diff.", { projectId: z.string(), paths: z.array(z.string()).default([]), includeTree: z.boolean().default(true), includeGitStatus: z.boolean().default(true), includeDiff: z.boolean().default(false), notes: z.string().optional() }, async (args) => {
+    const state = loadState();
+    const project = projectOrThrow(state, args.projectId);
+    const pack = await buildContextPack(project, { paths: args.paths || [], includeTree: args.includeTree !== false, includeGitStatus: args.includeGitStatus !== false, includeDiff: Boolean(args.includeDiff), includeRoles: true, includeSkills: true, notes: args.notes });
+    return { contextPackId: pack.id, filePath: pack.filePath, summary: pack.summary, markdown: pack.markdown };
+  });
+
+  registerMcpTool(server, "propose_web_patch", "Create a small web patch draft. This does not write files until permission mode and user approval allow it.", { projectId: z.string(), title: z.string(), rationale: z.string().optional(), changes: z.array(z.object({ filePath: z.string(), mode: z.enum(["create", "overwrite"]).default("overwrite"), content: z.string() })).min(1) }, (args, requestId) => ({
+    patch: createPatchDraft({ projectId: args.projectId, title: args.title, rationale: args.rationale, changes: args.changes }, requestId)
+  }));
+
+  registerMcpTool(server, "get_patch_diff", "Return readable unified diff text for a web patch.", { patchId: z.string() }, (args) => {
+    const state = loadState();
+    const patch = state.webPatches.find((p) => p.id === args.patchId);
+    if (!patch) throw new Error("patch not found");
+    const project = state.projects.find((p) => p.id === patch.projectId);
+    if (!project) throw new Error("project not found");
+    return { diff: diffWebPatch(patch, project) };
+  });
+
+  registerMcpTool(server, "request_apply_patch", "Request applying a web patch. manual_review creates a dashboard approval path; auto_review may apply low-risk patches; full_access applies directly.", { patchId: z.string() }, (args, requestId) => requestApplyPatch(args.patchId, requestId));
+  registerMcpTool(server, "request_revert_patch", "Request reverting an applied patch from its backup. Only full_access reverts directly; other modes defer to dashboard approval.", { patchId: z.string() }, (args, requestId) => requestRevertPatch(args.patchId, requestId));
+
+  registerMcpTool(server, "create_codex_job", "Create a Codex dry-run/CLI/app-server job. runImmediately only runs when permission mode does not require approval.", { projectId: z.string(), title: z.string(), task: z.string(), roles: z.array(z.string()).default([]), safetyLevel: z.number().int().min(0).max(5).default(1), executionPreference: z.enum(["dry-run", "cli", "app-server", "auto"]).default("auto"), runImmediately: z.boolean().default(false) }, async (args, requestId) => ({
+    job: await createCodexJobFromInput(args, requestId)
+  }));
+
+  registerMcpTool(server, "get_codex_job", "Read Codex job status, output, result, and events.", { jobId: z.string() }, (args) => {
+    const job = loadState().jobs.find((item) => item.id === args.jobId);
+    if (!job) throw new Error("job not found");
+    return { job };
+  });
+
+  registerMcpTool(server, "get_latest_logs", "Read recent Bridge logs. Supports level, requestId, and limit filters.", { level: z.enum(["debug", "info", "warn", "error"]).optional(), requestId: z.string().optional(), limit: z.number().int().min(1).max(500).default(100) }, (args) => {
+    const logs = readRecentLogs(args.limit || 100, args.level).filter((log) => !args.requestId || log.requestId === args.requestId);
+    return { logs };
+  });
+
+  registerMcpTool(server, "analyze_error_log", "Analyze the latest or matching error log and return likely cause plus next actions.", { requestId: z.string().optional(), logId: z.string().optional() }, (args) => {
+    const logs = readRecentLogs(300, "error");
+    const log = logs.find((entry) => (args.logId && entry.id === args.logId) || (args.requestId && entry.requestId === args.requestId)) || logs[0];
+    if (!log) throw new Error("no error logs found");
+    return { analysis: analyzeLogEntry(log) };
+  });
+
+  registerMcpTool(server, "create_repair_proposal", "Create a repair proposal from an error. It never executes automatically; user approval is required before a repair job runs.", { projectId: z.string().optional(), sourceRequestId: z.string().optional(), sourceLogId: z.string().optional(), sourceKind: z.enum(["http_error", "job_failure", "manual"]).default("manual"), errorSummary: z.string(), conciseDiagnosis: z.string(), solution: z.string(), executionPlan: z.array(z.string()).min(1), codexTask: z.string().optional(), safetyLevel: z.number().int().min(1).max(5).default(2) }, (args) => ({
+    repair: createRepairProposalFromInput(args)
+  }));
+
+  registerMcpTool(server, "create_ui_screenshot_job", "Create a local UI screenshot review job. If the dev server is not running, the job reports startup guidance instead of guessing.", { projectId: z.string(), devServerUrl: z.string().optional(), route: z.string().optional(), notes: z.string().optional(), runImmediately: z.boolean().default(false) }, (args, requestId) => ({
+    job: createUiScreenshotJob(args, requestId)
+  }));
+
+  registerMcpTool(server, "get_ui_screenshot_result", "Read the UI screenshot job result by job id.", { jobId: z.string() }, (args) => {
+    const job = loadState().jobs.find((item) => item.id === args.jobId);
+    if (!job) throw new Error("job not found");
+    return { jobId: job.id, status: job.status, result: job.result || null, stdout: job.stdout || null, stderr: job.stderr || null, events: job.events };
+  });
+
+  registerMcpTool(server, "create_cross_review", "Open a bounded ChatGPT Web vs Codex review session with max 1-3 rounds.", { projectId: z.string(), title: z.string(), webPatchId: z.string().optional(), codexJobId: z.string().optional(), webSummary: z.string().optional(), codexSummary: z.string().optional(), maxRounds: z.number().int().min(1).max(3).default(2) }, (args) => {
+    const state = loadState();
+    if (!state.projects.find((p) => p.id === args.projectId)) throw new Error("project not found");
+    if (!args.webPatchId && !args.codexJobId && !args.webSummary && !args.codexSummary) throw new Error("review needs at least one patch, job, or summary");
+    const review: ReviewSession = {
+      id: nanoid(10),
+      projectId: args.projectId,
+      title: args.title,
+      webPatchId: args.webPatchId,
+      codexJobId: args.codexJobId,
+      webSummary: args.webSummary,
+      codexSummary: args.codexSummary,
+      status: "open",
+      maxRounds: args.maxRounds || 2,
+      roundsUsed: 0,
+      events: [{ at: now(), type: "review_created", message: "MCP opened a bounded cross review." }],
+      createdAt: now(),
+      updatedAt: now()
+    };
+    state.reviewSessions.push(review);
+    saveState(state);
+    return { review };
+  });
+
+  registerMcpTool(server, "add_cross_review_round", "Add one bounded review round. Each round should contain blocking issues, concrete improvements, evidence, and recommended decision.", { reviewId: z.string(), speaker: z.enum(["chatgpt-web", "codex", "user"]), blockingIssues: z.array(z.string()).default([]), concreteImprovements: z.array(z.string()).default([]), evidence: z.array(z.string()).default([]), recommendedDecision: z.enum(["use_web_patch", "use_codex_result", "hybrid", "needs_human"]) }, (args) => {
+    const state = loadState();
+    const review = state.reviewSessions.find((item) => item.id === args.reviewId);
+    if (!review) throw new Error("review not found");
+    if (review.status !== "open") throw new Error(`review is not open: ${review.status}`);
+    if (review.roundsUsed >= review.maxRounds) throw new Error("round limit reached; finalize the review");
+    review.roundsUsed += 1;
+    review.updatedAt = now();
+    review.events.push({ at: now(), type: "review_round", message: `${args.speaker}: ${args.recommendedDecision}`, data: { blockingIssues: args.blockingIssues, concreteImprovements: args.concreteImprovements, evidence: args.evidence, recommendedDecision: args.recommendedDecision } });
+    saveState(state);
+    return { review, remainingRounds: Math.max(0, review.maxRounds - review.roundsUsed), stopNow: review.roundsUsed >= review.maxRounds };
+  });
+
+  registerMcpTool(server, "finalize_cross_review", "Finalize a bounded cross review. Decisions are use_web_patch, use_codex_result, hybrid, or needs_human.", { reviewId: z.string(), decision: z.enum(["use_web_patch", "use_codex_result", "hybrid", "needs_human"]), rationale: z.string() }, (args) => {
+    const state = loadState();
+    const review = state.reviewSessions.find((item) => item.id === args.reviewId);
+    if (!review) throw new Error("review not found");
+    const mapped = args.decision === "use_web_patch" ? "web" : args.decision === "use_codex_result" ? "codex" : args.decision;
+    review.status = mapped === "needs_human" ? "needs_human" : "accepted";
+    review.decision = mapped as ReviewSession["decision"];
+    review.rationale = args.rationale;
+    review.updatedAt = now();
+    review.events.push({ at: now(), type: "review_decision", message: `${args.decision}: ${args.rationale}` });
+    saveState(state);
+    return { review };
+  });
+
+  return server;
+}
+
+const mcpSessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport; createdAt: string }>();
+
+function isMcpInitializeRequest(body: unknown): boolean {
+  if (!body || typeof body !== "object") return false;
+  if (Array.isArray(body)) return body.some((item) => isMcpInitializeRequest(item));
+  return (body as { method?: unknown }).method === "initialize";
+}
+
 app.use((req: Request, res: Response, next: NextFunction) => {
   const requestId = nanoid(8);
   (req as Request & { requestId?: string }).requestId = requestId;
@@ -1210,7 +1908,55 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+app.use("/mcp", (req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "authorization,x-api-key,content-type,accept,mcp-session-id,last-event-id");
+  res.setHeader("Access-Control-Expose-Headers", "mcp-session-id,x-request-id");
+  if (req.method === "OPTIONS") {
+    res.status(204).send();
+    return;
+  }
+  next();
+});
+
 app.use(auth);
+
+app.all("/mcp", async (req, res, next) => {
+  const requestId = (req as Request & { requestId?: string }).requestId || nanoid(8);
+  try {
+    const rawSessionId = req.header("mcp-session-id") || "";
+    let session = rawSessionId ? mcpSessions.get(rawSessionId) : undefined;
+
+    if (!session) {
+      if (req.method !== "POST" || !isMcpInitializeRequest(req.body)) {
+        res.status(400).json({
+          error: "mcp_session_required",
+          message: "Start with an MCP initialize request, then reuse the returned mcp-session-id header.",
+          requestId
+        });
+        return;
+      }
+      const server = createMcpServer();
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => nanoid(14) });
+      transport.onclose = () => {
+        if (transport.sessionId) mcpSessions.delete(transport.sessionId);
+      };
+      await server.connect(transport);
+      session = { server, transport, createdAt: now() };
+    }
+
+    const { transport } = session;
+    await transport.handleRequest(req, res, req.body);
+    if (transport.sessionId && !mcpSessions.has(transport.sessionId)) {
+      mcpSessions.set(transport.sessionId, session);
+    }
+    writeLog("debug", "mcp.http", "MCP HTTP request handled", { method: req.method, sessionId: transport.sessionId || rawSessionId || null }, requestId);
+  } catch (error) {
+    writeLog("error", "mcp.http", "MCP HTTP request failed", { method: req.method, error: error instanceof Error ? error.message : String(error) }, requestId);
+    next(error);
+  }
+});
 
 app.get("/bootstrap", (req, res) => {
   if (!isLoopbackRequest(req)) {
@@ -1239,13 +1985,26 @@ app.get("/health", (_req, res) => {
     execution: currentExecution(),
     version: VERSION,
     permissionMode: settings.permissionMode,
-    supports: { cli: true, appServer: true, externalOutputMirror: true, crossReview: true, accessModes: true, logs: true, patchDiff: true, patchRevert: true, appServerApprovalQueue: true, githubSync: true, uiScreenshotReview: true, repairProposals: true, contextPacks: true, taskTemplates: true, exportState: true, supportBundle: true, testPlan: true }
+    supports: { mcp: true, folderPicker: true, cli: true, appServer: true, externalOutputMirror: true, crossReview: true, accessModes: true, logs: true, patchDiff: true, patchRevert: true, appServerApprovalQueue: true, githubSync: true, uiScreenshotReview: true, repairProposals: true, contextPacks: true, taskTemplates: true, exportState: true, supportBundle: true, testPlan: true }
   });
 });
 
 app.get("/roles", (_req, res) => res.json({ roles: listMarkdownFiles(ROLE_DIR) }));
 
 app.get("/skills", (_req, res) => res.json({ skills: listSkillFolders(SKILL_DIR) }));
+
+app.get("/mcp-center", (_req, res) => {
+  res.json({ server: { endpoint: "/mcp", transport: "streamable-http", auth: "local-pairing-code" }, plugins: MCP_PLUGINS, summary: mcpPluginSummary() });
+});
+
+app.get("/fs/roots", (_req, res) => {
+  res.json({ roots: listFilesystemRoots() });
+});
+
+app.get("/fs/list", (req, res) => {
+  const browsePath = typeof req.query.path === "string" ? req.query.path : undefined;
+  res.json(listBrowsableDirectories(browsePath));
+});
 
 app.get("/config", (_req, res) => {
   const state = loadState();
@@ -1387,6 +2146,13 @@ app.post("/projects", (req, res) => {
   state.projects.push(project);
   saveState(state);
   res.status(201).json({ project });
+});
+
+app.post("/projects/select", (req, res) => {
+  const schema = z.object({ path: z.string().min(1), displayName: z.string().optional(), allowShell: z.boolean().default(false) });
+  const body = schema.parse(req.body || {});
+  const result = createProjectFromPath(body);
+  res.status(result.created ? 201 : 200).json({ project: result.project, created: result.created });
 });
 
 app.get("/projects/:id/inspect", (req, res) => {

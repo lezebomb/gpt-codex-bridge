@@ -7,7 +7,7 @@
 1. 在仓库根目录运行 `npm.cmd install --no-audit --no-fund`。
 2. 运行 `npm.cmd run dev`。
 3. 打开 `http://localhost:8787/dashboard/`。
-4. 在“设置”点击“测试连接”。
+4. 在“连接向导”点击“测试连接”。
 5. 注册演示项目。
 6. 读取文件。
 7. 创建网页补丁。

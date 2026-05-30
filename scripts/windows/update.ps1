@@ -47,7 +47,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $bridgeDir "package.json"))) {
 }
 
 Push-Location $bridgeDir
-npm.cmd install --no-audit --no-fund
+$npmCache = Join-Path $bridgeDir ".npm-cache"
+New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
+npm.cmd install --no-audit --no-fund --cache $npmCache
 if (-not $SkipBuild) {
   npm.cmd run build
 }

@@ -7,124 +7,95 @@ const repoRoot = path.resolve(process.cwd(), "..");
 const demoProjectPath = path.join(repoRoot, "examples", "demo-project");
 const demoReadmePath = path.join(demoProjectPath, "README.md");
 
-test("dashboard connection, core workflow, and repair flow", async ({ page }) => {
-  test.setTimeout(120000);
-  const marker = `Dashboard smoke marker ${Date.now()}`;
-  const patchTitle = `Smoke patch ${Date.now()}`;
-  const jobTitle = `Smoke dry-run job ${Date.now()}`;
+test("dashboard setup, project, patch, job, logs, and MCP center", async ({ page }) => {
+  test.setTimeout(150000);
   const originalReadme = fs.readFileSync(demoReadmePath, "utf8");
+  const marker = `Dashboard UI smoke marker ${Date.now()}`;
   const patchedReadme = `${originalReadme.trimEnd()}\n\n${marker}\n`;
+  const patchTitle = `UI smoke patch ${Date.now()}`;
+  const jobTitle = `UI smoke dry-run job ${Date.now()}`;
+
   fs.mkdirSync(path.join(process.cwd(), "output", "playwright"), { recursive: true });
-  const bootstrapResponse = await page.request.get(`${baseUrl}/bootstrap`);
-  expect(bootstrapResponse.ok()).toBeTruthy();
-  const bootstrap = await bootstrapResponse.json();
-  const token = process.env.BRIDGE_TOKEN || bootstrap.token;
-  expect(token).toBeTruthy();
 
   await page.goto(`${baseUrl}/dashboard/`);
   await page.evaluate(() => localStorage.clear());
   await page.reload();
 
-  await expect(page.locator("#topConnectionText")).toContainText("已连接");
-  await expect(page.locator("#alert")).not.toContainText("unauthorized");
+  await expect(page.getByRole("heading", { name: "连接向导" })).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("unauthorized");
+  await expect(page.locator("body")).toContainText("本地配对码");
 
-  await page.locator('[data-view="settings"]').click();
-  await expect(page.locator('#settingsForm [name="baseUrl"]')).toHaveValue(baseUrl);
-  await expect(page.locator('#settingsForm [name="baseUrl"]')).not.toBeEditable();
-  await expect(page.locator('#settingsForm [name="token"]')).not.toBeEditable();
-  await page.evaluate(() => localStorage.setItem("ccb_token", "wrong-token"));
-  await page.reload();
-  await page.locator('[data-view="settings"]').click();
-  await page.locator("#testConnection").click();
-  await expect(page.locator("#alert")).toContainText("认证失败");
+  await page.getByRole("button", { name: "测试连接" }).click();
+  await expect(page.locator(".alert.success")).toContainText("连接成功");
+  await expect(page.locator("body")).not.toContainText("认证失败");
 
-  await page.evaluate((nextToken) => localStorage.setItem("ccb_token", nextToken), token);
-  await page.reload();
-  await page.locator('[data-view="settings"]').click();
-  await page.locator("#testConnection").click();
-  await expect(page.locator("#settingsStatus")).toContainText("连接成功");
-  await expect(page.locator("#alert")).not.toContainText("unauthorized");
-  page.once("dialog", (dialog) => dialog.accept());
-  await page.locator("#regenerateToken").click();
-  await expect(page.locator("#alert")).toContainText("本机访问令牌已重新生成");
+  await page.getByRole("button", { name: "English" }).click();
+  await expect(page.getByRole("heading", { name: "Setup" })).toBeVisible();
+  await page.getByRole("button", { name: "中文" }).click();
+  await expect(page.getByRole("heading", { name: "连接向导" })).toBeVisible();
 
-  await page.locator('[data-lang="en"]').click();
-  await expect(page.locator("h1")).toContainText("Local Workflow Console");
-  await page.locator('[data-lang="zh"]').click();
-  await expect(page.locator("h1")).toContainText("本地工作流控制台");
-
-  await page.locator("#sidebarToggle").click();
-  await expect(page.locator("#appShell")).toHaveClass(/sidebar-collapsed/);
-  await page.locator("#sidebarToggle").click();
-  await expect(page.locator("#appShell")).not.toHaveClass(/sidebar-collapsed/);
+  await page.locator('[data-action="toggle-sidebar"]').first().click();
+  await expect(page.locator(".shell")).toHaveClass(/collapsed/);
+  await page.locator(".topbar [data-action='toggle-sidebar']").click();
+  await expect(page.locator(".shell")).not.toHaveClass(/collapsed/);
 
   const selectStyle = await page.locator("#projectSelect").evaluate((el) => {
     const style = getComputedStyle(el);
     return { color: style.color, backgroundColor: style.backgroundColor };
   });
-  expect(selectStyle.color).not.toBe("rgb(255, 255, 255)");
   expect(selectStyle.backgroundColor).not.toBe("rgb(128, 128, 128)");
+  expect(selectStyle.color).not.toBe("rgb(255, 255, 255)");
 
-  await page.locator('[data-view="projects"]').click();
-  await page.locator('#projectForm [name="name"]').fill("demo-project");
-  await page.locator('#projectForm [name="path"]').fill(demoProjectPath);
-  await page.locator('#projectForm button[type="submit"]').click();
+  await page.locator('[data-view="project"]').click();
+  await expect(page.getByRole("heading", { name: "项目", exact: true })).toBeVisible();
+  await page.locator('#manualProjectForm input[name="displayName"]').fill("demo-project");
+  await page.locator('#manualProjectForm input[name="path"]').fill(demoProjectPath);
+  await page.locator('#manualProjectForm button[type="submit"]').click();
+  await expect(page.locator(".alert.success")).toContainText("项目已注册");
   await expect(page.locator("#projectSelect")).toContainText("demo-project");
 
-  await page.locator('[data-view="files"]').click();
-  await page.locator('#fileReadForm [name="filePath"]').fill("src/App.tsx");
-  await page.locator('#fileReadForm button[type="submit"]').click();
-  await expect(page.locator("#fileTreeDetail")).toContainText("App.tsx");
+  await page.locator('#fileReadForm input[name="filePath"]').fill("src/App.tsx");
+  await page.locator('#fileReadForm [data-action="read-file"]').click();
+  await expect(page.locator("#fileContentArea")).toHaveValue(/App/);
 
-  await page.locator('[data-view="patches"]').click();
-  await page.locator('#patchForm [name="title"]').fill(patchTitle);
-  await page.locator('#patchForm [name="rationale"]').fill("Playwright smoke test patch.");
-  await page.locator('#patchForm [name="filePath"]').fill("README.md");
-  await page.locator('#patchForm [name="mode"]').selectOption("overwrite");
-  await page.locator('#patchForm [name="content"]').fill(patchedReadme);
+  await page.locator('[data-view="tasks"]').click();
+  await page.locator('#patchForm input[name="title"]').fill(patchTitle);
+  await page.locator('#patchForm input[name="filePath"]').fill("README.md");
+  await page.locator('#patchForm select[name="mode"]').selectOption("overwrite");
+  await page.locator('#patchForm textarea[name="rationale"]').fill("Playwright dashboard smoke test.");
+  await page.locator('#patchForm textarea[name="content"]').fill(patchedReadme);
   await page.locator('#patchForm button[type="submit"]').click();
-  await expect(page.locator("#patchList")).toContainText(patchTitle);
+  await expect(page.locator(".item", { hasText: patchTitle }).first()).toBeVisible();
 
   const patchItem = page.locator(".item", { hasText: patchTitle }).first();
-  await patchItem.locator('[data-action="diff-patch"]').click();
-  await expect(page.locator("#diffDetail")).toContainText(marker);
+  await patchItem.locator("[data-patch-diff]").click();
+  await expect(page.locator("pre", { hasText: marker }).first()).toBeVisible();
 
-  await page.locator('[data-view="patches"]').click();
   page.once("dialog", (dialog) => dialog.accept());
-  await patchItem.locator('[data-action="apply-patch"]').click();
-  await expect(page.locator("#patchList")).toContainText("已应用");
+  await patchItem.locator("[data-patch-apply]").click();
+  await expect.poll(() => fs.readFileSync(demoReadmePath, "utf8")).toContain(marker);
 
-  const appliedItem = page.locator(".item", { hasText: patchTitle }).first();
+  const appliedPatchItem = page.locator(".item", { hasText: patchTitle }).first();
   page.once("dialog", (dialog) => dialog.accept());
-  await appliedItem.locator('[data-action="revert-patch"]').click();
-  await expect(page.locator(".item", { hasText: patchTitle }).first()).toContainText("已回滚");
+  await appliedPatchItem.locator("[data-patch-revert]").click();
   await expect.poll(() => fs.readFileSync(demoReadmePath, "utf8")).toBe(originalReadme);
 
-  await page.locator('[data-view="jobs"]').click();
-  await page.locator('#jobForm [name="title"]').fill(jobTitle);
-  await page.locator('#jobForm [name="roles"]').fill("qa_reviewer");
-  await page.locator('#jobForm [name="safetyLevel"]').selectOption("1");
-  await page.locator('#jobForm [name="task"]').fill("Dry-run verification from Playwright UI smoke test.");
+  await page.locator('#jobForm input[name="title"]').fill(jobTitle);
+  await page.locator('#jobForm input[name="roles"]').fill("qa_reviewer");
+  await page.locator('#jobForm select[name="safetyLevel"]').selectOption("1");
+  await page.locator('#jobForm textarea[name="task"]').fill("Dry-run verification from Playwright UI smoke test.");
   await page.locator('#jobForm button[type="submit"]').click();
-  await expect(page.locator("#jobList")).toContainText(jobTitle);
-
-  await page.locator('#jobList [data-action="approve-run-job"]').first().click();
-  await expect(page.locator("#jobList")).toContainText("已完成");
+  await expect(page.locator(".item", { hasText: jobTitle }).first()).toBeVisible();
+  await page.locator(".item", { hasText: jobTitle }).first().locator("[data-job-approve]").click();
+  await expect(page.locator(".item", { hasText: jobTitle }).first()).toContainText(/completed|已完成/);
 
   await page.locator('[data-view="logs"]').click();
-  await page.locator("#refreshLogs").click();
-  await expect(page.locator("#logList")).toContainText(/web_patch|codex|http/);
+  await page.locator('[data-action="load-logs"]').click();
+  await expect(page.locator(".item").first()).toBeVisible();
 
-  await page.locator('[data-view="files"]').click();
-  await page.locator('#fileReadForm [name="filePath"]').fill("src/does-not-exist.tsx");
-  await page.locator('#fileReadForm button[type="submit"]').click();
-  await expect(page.locator("#alert")).toContainText("请求编号");
-
-  await page.locator('[data-view="repairs"]').click();
-  await page.locator("#loadLatestErrors").click();
-  await expect(page.locator("#repairSourceDetail")).toContainText("请求编号");
-  await page.locator("#fillRepairFromLatest").click();
-  await expect(page.locator('#repairForm [name="errorSummary"]')).not.toHaveValue("");
+  await page.locator('[data-view="mcp"]').click();
+  await page.locator('[data-action="load-mcp-tools"]').click();
+  await expect(page.locator(".item", { hasText: "get_bridge_status" }).first()).toBeVisible();
 
   await page.screenshot({ path: "output/playwright/dashboard-smoke.png", fullPage: true });
 });

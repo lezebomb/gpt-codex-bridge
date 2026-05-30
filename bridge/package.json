@@ -9,9 +9,11 @@
     "build": "tsc",
     "check:public": "node --check public/app.js",
     "smoke": "node scripts/smoke-test.mjs",
-    "ui:smoke": "playwright test scripts/dashboard-ui.spec.mjs --reporter=list"
+    "mcp:smoke": "node scripts/mcp-smoke-test.mjs",
+    "ui:smoke": "playwright test --config=playwright.config.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@openai/codex-sdk": "latest",
     "express": "latest",
     "nanoid": "latest",

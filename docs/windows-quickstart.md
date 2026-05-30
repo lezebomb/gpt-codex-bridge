@@ -1,157 +1,137 @@
-# Windows PowerShell 快速启动
+# Windows PowerShell 从零使用教程
 
-本指南面向 Windows PowerShell。所有命令默认从仓库根目录开始。
+## 1. 解压或克隆项目
 
-## 1. 进入项目目录
+建议放到桌面：
 
-```powershell
-cd C:\Users\24981\Desktop\gpt-codex-bridge
+```text
+C:\Users\24981\Desktop\gpt-codex-bridge
 ```
 
 ## 2. 安装依赖
 
-推荐从仓库根目录安装，根目录脚本会自动安装 `bridge` 依赖：
+必须进入 `bridge` 目录：
 
 ```powershell
-npm.cmd install --no-audit --no-fund
+cd C:\Users\24981\Desktop\gpt-codex-bridge\bridge
+npm.cmd install --no-audit --no-fund --cache .\.npm-cache
 ```
 
-如果依赖状态异常：
-
-```powershell
-npm.cmd run repair-install
-```
-
-如果需要清理 lock 文件后重装：
-
-```powershell
-.\scripts\windows\repair-install.ps1 -RemoveLock
-```
+不要在仓库根目录直接运行 `npm run dev` 来判断后端是否安装成功；后端项目在 `bridge` 目录。Windows PowerShell 中优先使用 `npm.cmd`。
 
 ## 3. 启动 Bridge
 
-不需要先设置 token、权限模式或执行模式。默认端口是 `8787`，默认权限模式是“人工审查”，默认执行模式是“演练模式”。
-
 ```powershell
 npm.cmd run dev
 ```
 
-看到类似输出表示启动成功：
+默认：
 
 ```text
-Bridge listening on http://localhost:8787
+端口：8787
+执行模式：演练模式
+权限模式：人工审查
 ```
 
-如果 `8787` 被占用，可以临时换端口：
+不需要预先设置配对码。Bridge 会自动生成“本地配对码”，需要更换时在“连接向导”点击“重新生成”。
 
-```powershell
-$env:BRIDGE_PORT = "8788"
-npm.cmd run dev
-```
-
-## 4. 打开控制台
+## 4. 打开 dashboard
 
 ```text
 http://localhost:8787/dashboard/
 ```
 
-首次打开时，页面会从本机 `/bootstrap` 自动读取服务地址和访问令牌，并填入“设置”。进入“设置”点击“测试连接”，成功提示应类似：
+进入“连接向导”，点击“测试连接”。
+
+## 5. 注册 demo project
+
+进入“项目”，选择或粘贴：
 
 ```text
-连接成功；运行模式：演练模式；权限模式：人工审查。
-```
-
-## 5. 在界面中选择模式
-
-进入“设置”可以选择：
-
-- 执行模式：演练模式、命令行模式、应用服务模式
-- 权限模式：只读检查、人工审查、自动审查、完全访问
-
-访问令牌自动生成，只读显示。需要换令牌时点击“重新生成令牌”。完全访问仍需要输入：
-
-```text
-我已理解风险
-```
-
-## 6. 注册演示项目
-
-进入“项目”，填写：
-
-```text
-项目名称: demo-project
-本地路径: C:\Users\24981\Desktop\gpt-codex-bridge\examples\demo-project
+C:\Users\24981\Desktop\gpt-codex-bridge\examples\demo-project
 ```
 
 点击“注册项目”。
 
-## 7. 读取文件
+## 6. 读取文件
 
-进入“文件”，在相对路径中填写：
+在“项目”页面输入：
 
 ```text
 src/App.tsx
 ```
 
-点击“读取文件”。内容会加载到页面中，也会同步到右侧补丁编辑器。
+点击“读取文件”。
 
-## 8. 创建网页补丁
+## 7. 创建网页补丁
 
-进入“网页补丁”，填写：
+进入“任务”：
 
-```text
-补丁标题: 测试 README 修改
-目标文件路径: README.md
-操作模式: 覆盖文件
-```
+1. 标题：`更新 README 测试`
+2. 文件路径：`README.md`
+3. 模式：`覆盖现有文件`
+4. 填入完整文件内容
+5. 点击“创建补丁草稿”
+6. 点击“查看差异”
+7. 确认后点击“应用”
+8. 需要恢复时点击“回滚”
 
-粘贴完整文件内容后点击“创建补丁草案”。
-
-## 9. 查看差异、应用、回滚
-
-1. 在补丁列表点击“差异”。
-2. 确认新增/删除行颜色可读。
-3. 点击“应用”并确认。
-4. 状态变成“已应用”。
-5. 点击“回滚”并确认。
-6. 状态变成“已回滚”。
-
-## 10. 创建演练任务
-
-进入“执行任务”，创建安全等级为 `1` 的任务。点击“批准并运行”后，演练模式会完成任务，但不会真实调用 Codex 修改文件。
-
-## 11. 查看日志
-
-进入“日志”，点击“刷新”。可以按级别筛选，也可以搜索请求编号。
-
-## 12. 修复中心测试
-
-故意读取不存在的文件，例如：
+Bridge 会在项目目录下创建备份：
 
 ```text
-src/does-not-exist.tsx
+.chatgpt-codex\patch-backups
 ```
 
-页面会显示请求编号。进入“修复中心”：
+## 8. 创建演练模式 Codex 任务
 
-1. 点击“读取最新错误”。
-2. 点击“从最新错误生成草案”。
-3. 检查诊断、解决方案和执行计划。
-4. 点击“创建修复方案”。
-5. 只有用户批准后才会创建或运行修复任务。
+进入“任务”：
 
-## 13. 本地检查命令
+1. 标题：`演练验证`
+2. 安全等级：`1`
+3. 任务说明：`请检查项目结构并给出验证建议。`
+4. 点击“创建 Codex 任务”
+5. 在任务卡片点击“批准并运行”
 
-在仓库根目录：
+演练模式不会真实调用 Codex，也不会改文件。
 
-```powershell
-npm.cmd run check:public
-npm.cmd run build
-npm.cmd run smoke
+## 9. 查看日志和修复方案
+
+进入“日志”，点击“刷新”。如果有错误，复制 `requestId`。
+
+进入“高级”的“修复中心”，填写错误摘要、诊断、方案和步骤，创建修复方案。修复方案不会自动执行，必须在“审批”中确认。
+
+## 10. 连接 ChatGPT Custom MCP
+
+本地测试可以先看：
+
+```text
+http://localhost:8787/mcp
 ```
 
-浏览器 UI 冒烟测试需要保持 Bridge 正在运行：
+ChatGPT 需要 HTTPS。用 Cloudflare Tunnel 或 ngrok 暴露：
+
+```text
+https://bridge.your-domain.com -> http://localhost:8787
+```
+
+ChatGPT Custom MCP 填：
+
+```text
+https://bridge.your-domain.com/mcp
+```
+
+认证选择“访问令牌 / API 密钥”，值填 dashboard 的“本地配对码”。
+
+## 11. 安装成开始菜单程序
+
+从仓库根目录运行：
 
 ```powershell
-npm.cmd run ui:smoke
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\install.ps1
+```
+
+以后从开始菜单启动：
+
+```text
+Start ChatGPT Codex Bridge
 ```

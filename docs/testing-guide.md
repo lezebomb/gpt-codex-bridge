@@ -24,7 +24,7 @@ npm.cmd run dev
 http://localhost:8787/dashboard/
 ```
 
-不需要设置 token。测试脚本和页面都会通过本机 `/bootstrap` 自动读取访问令牌。
+不需要手动设置配对码。测试脚本和页面都会通过本机 `/bootstrap` 自动读取本地配对码。
 
 ## 浏览器 UI 冒烟测试
 
@@ -51,7 +51,7 @@ UI 冒烟测试覆盖：
 
 ## 手动验收清单
 
-1. 打开“设置”，点击“测试连接”。
+1. 打开“连接向导”，点击“测试连接”。
 2. 切换中文 / English，再切回中文。
 3. 收起侧边栏，再展开。
 4. 打开下拉框，确认没有灰底白字。
@@ -73,5 +73,5 @@ PowerShell 中不要依赖 `curl`。使用：
 $bootstrap = Invoke-RestMethod -Uri http://localhost:8787/bootstrap
 Invoke-RestMethod `
   -Uri http://localhost:8787/config `
-  -Headers @{ Authorization = "Bearer $($bootstrap.token)" }
+  -Headers @{ "x-api-key" = $bootstrap.token }
 ```

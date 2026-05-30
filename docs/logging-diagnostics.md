@@ -12,7 +12,7 @@
 
 ## PowerShell API
 
-先获取本机令牌：
+先获取本机配对码：
 
 ```powershell
 $bootstrap = Invoke-RestMethod -Uri http://localhost:8787/bootstrap
@@ -23,7 +23,7 @@ $bootstrap = Invoke-RestMethod -Uri http://localhost:8787/bootstrap
 ```powershell
 Invoke-RestMethod `
   -Uri http://localhost:8787/logs `
-  -Headers @{ Authorization = "Bearer $($bootstrap.token)" }
+  -Headers @{ "x-api-key" = $bootstrap.token }
 ```
 
 只看错误：
@@ -31,7 +31,7 @@ Invoke-RestMethod `
 ```powershell
 Invoke-RestMethod `
   -Uri "http://localhost:8787/logs?level=error" `
-  -Headers @{ Authorization = "Bearer $($bootstrap.token)" }
+  -Headers @{ "x-api-key" = $bootstrap.token }
 ```
 
 读取诊断：
@@ -39,7 +39,7 @@ Invoke-RestMethod `
 ```powershell
 Invoke-RestMethod `
   -Uri http://localhost:8787/diagnostics `
-  -Headers @{ Authorization = "Bearer $($bootstrap.token)" }
+  -Headers @{ "x-api-key" = $bootstrap.token }
 ```
 
 读取最新错误：
@@ -47,7 +47,7 @@ Invoke-RestMethod `
 ```powershell
 Invoke-RestMethod `
   -Uri http://localhost:8787/errors/latest `
-  -Headers @{ Authorization = "Bearer $($bootstrap.token)" }
+  -Headers @{ "x-api-key" = $bootstrap.token }
 ```
 
 ## 日志位置

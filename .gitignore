@@ -3,8 +3,10 @@ dist/
 .env
 data/
 bridge/data/
+bridge/.npm-cache/
 bridge/test-results/
 bridge/output/
 bridge/playwright-report/
+release/
 **/.chatgpt-codex/
 .DS_Store

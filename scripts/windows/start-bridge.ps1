@@ -45,7 +45,7 @@ function Test-BridgeReady {
 Write-Host "Starting ChatGPT Codex Bridge..."
 Write-Host "Bridge dir: $bridgeDir"
 Write-Host "Dashboard: $dashboardUrl"
-Write-Host "Token, execution mode, and access mode are managed in Dashboard > Settings."
+Write-Host "Pairing code, execution mode, and access mode are managed in the dashboard."
 Write-Host ""
 
 if (Test-BridgeReady) {
@@ -59,10 +59,12 @@ if (Test-BridgeReady) {
 Push-Location $bridgeDir
 try {
   $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
+  $npmCache = Join-Path $bridgeDir ".npm-cache"
+  New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
 
   if (-not (Test-Path -LiteralPath (Join-Path $bridgeDir "node_modules"))) {
     Write-Host "Installing dependencies because node_modules is missing..."
-    & $npm install --no-audit --no-fund
+    & $npm install --no-audit --no-fund --cache $npmCache
   }
 
   if ($Foreground) {

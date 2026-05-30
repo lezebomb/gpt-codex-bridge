@@ -1,31 +1,32 @@
-# GitHub Sync
+# GitHub 同步
 
-GitHub sync is intentionally local-first. It uses local `git` and optional GitHub CLI (`gh`) from the registered project directory.
+GitHub 同步保持本地优先。Bridge 只调用已注册项目目录里的本机 `git` 和可选 GitHub CLI `gh`。
 
-## Requirements
+## 检查工具
 
-```bash
+```powershell
 git --version
 gh --version
 ```
 
-For PR creation:
+如果要创建 PR：
 
-```bash
+```powershell
 gh auth status
 ```
 
-## Dashboard flow
+## 推荐流程
 
-1. Open **GitHub Sync**.
-2. Create and checkout a working branch.
-3. Apply a web patch or run a Codex job.
-4. Inspect diff.
-5. Commit locally.
-6. Create a draft PR.
+1. 在 dashboard 注册项目。
+2. 保持权限模式为“人工审查”。
+3. 创建并切换工作分支。
+4. 创建网页补丁或 Codex 任务。
+5. 查看 diff 和测试结果。
+6. 本地提交。
+7. 用 `gh` 创建 draft PR。
 
-## Safety
+## 安全建议
 
-- Keep `manual_review` mode for real repositories.
-- Do not use `full_access` on `main`.
-- Prefer draft PRs until ChatGPT/Codex bounded review is complete.
+- 真实仓库默认使用 `manual_review`。
+- 不要在 `main` 上开启 `full_access`。
+- 合并前让 ChatGPT 主控 GPT 与 Codex 做有限轮次审查。

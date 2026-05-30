@@ -12,8 +12,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $bridgeDir "package.json"))) {
   throw "Could not find bridge/package.json under $repoRoot"
 }
 
+$workspaceCache = Join-Path $bridgeDir ".npm-cache"
 Write-Host "Cleaning npm cache..."
-npm.cmd cache clean --force
+npm.cmd cache clean --force --cache $workspaceCache
 
 $pathsToRemove = @(
   (Join-Path $repoRoot "node_modules"),
@@ -42,7 +43,8 @@ if ($RemoveLock) {
 
 Write-Host "Installing bridge dependencies..."
 Push-Location $bridgeDir
-npm.cmd install --no-audit --no-fund
+New-Item -ItemType Directory -Force -Path $workspaceCache | Out-Null
+npm.cmd install --no-audit --no-fund --cache $workspaceCache
 Pop-Location
 
 Write-Host ""
