@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+data/
+bridge/data/
+bridge/test-results/
+bridge/output/
+bridge/playwright-report/
+**/.chatgpt-codex/
+.DS_Store

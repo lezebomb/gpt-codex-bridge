@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>本地桥接控制台</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="appShell" class="shell">
+      <aside class="sidebar" aria-label="控制台导航">
+        <div class="brand">
+          <div class="brand-mark">桥</div>
+          <div class="brand-copy">
+            <div class="brand-title" data-i18n="brand.title">本地桥接</div>
+            <div class="brand-subtitle" data-i18n="brand.subtitle">本地工作流控制台</div>
+          </div>
+          <button id="sidebarToggle" class="icon-button" type="button" title="折叠侧边栏" data-i18n-title="sidebar.toggle">≡</button>
+        </div>
+
+        <nav class="nav">
+          <div class="nav-group">
+            <div class="nav-group-title" data-i18n="nav.group.overview">总览</div>
+            <button class="nav-item active" data-view="overview" title="总览"><span class="nav-icon">总</span><span class="nav-label" data-i18n="nav.overview">总览</span></button>
+          </div>
+
+          <div class="nav-group">
+            <div class="nav-group-title" data-i18n="nav.group.projects">项目与文件</div>
+            <button class="nav-item" data-view="projects" title="项目"><span class="nav-icon">项</span><span class="nav-label" data-i18n="nav.projects">项目</span></button>
+            <button class="nav-item" data-view="files" title="文件"><span class="nav-icon">文</span><span class="nav-label" data-i18n="nav.files">文件</span></button>
+            <button class="nav-item" data-view="templates" title="模板"><span class="nav-icon">模</span><span class="nav-label" data-i18n="nav.templates">模板</span></button>
+          </div>
+
+          <div class="nav-group">
+            <div class="nav-group-title" data-i18n="nav.group.patch">网页补丁</div>
+            <button class="nav-item" data-view="patches" title="网页补丁"><span class="nav-icon">补</span><span class="nav-label" data-i18n="nav.patches">网页补丁</span></button>
+            <button class="nav-item" data-view="diffs" title="差异查看器"><span class="nav-icon">差</span><span class="nav-label" data-i18n="nav.diffs">差异查看器</span></button>
+          </div>
+
+          <div class="nav-group">
+            <div class="nav-group-title" data-i18n="nav.group.codex">执行器</div>
+            <button class="nav-item" data-view="jobs" title="执行任务"><span class="nav-icon">任</span><span class="nav-label" data-i18n="nav.jobs">执行任务</span></button>
+            <button class="nav-item" data-view="codex-app" title="执行器连接"><span class="nav-icon">连</span><span class="nav-label" data-i18n="nav.codexApp">执行器连接</span></button>
+            <button class="nav-item" data-view="approvals" title="审批"><span class="nav-icon">批</span><span class="nav-label" data-i18n="nav.approvals">审批</span></button>
+          </div>
+
+          <div class="nav-group">
+            <div class="nav-group-title" data-i18n="nav.group.review">审查与修复</div>
+            <button class="nav-item" data-view="reviews" title="交叉审查"><span class="nav-icon">交</span><span class="nav-label" data-i18n="nav.reviews">交叉审查</span></button>
+            <button class="nav-item" data-view="screenshots" title="界面截图"><span class="nav-icon">图</span><span class="nav-label" data-i18n="nav.screenshots">界面截图</span></button>
+            <button class="nav-item" data-view="repairs" title="修复中心"><span class="nav-icon">修</span><span class="nav-label" data-i18n="nav.repairs">修复中心</span></button>
+            <button class="nav-item" data-view="github" title="代码同步"><span class="nav-icon">同</span><span class="nav-label" data-i18n="nav.github">代码同步</span></button>
+          </div>
+
+          <div class="nav-group">
+            <div class="nav-group-title" data-i18n="nav.group.system">系统</div>
+            <button class="nav-item" data-view="logs" title="日志"><span class="nav-icon">志</span><span class="nav-label" data-i18n="nav.logs">日志</span></button>
+            <button class="nav-item" data-view="knowledge" title="角色与技能"><span class="nav-icon">技</span><span class="nav-label" data-i18n="nav.knowledge">角色与技能</span></button>
+            <button class="nav-item" data-view="access" title="权限模式"><span class="nav-icon">权</span><span class="nav-label" data-i18n="nav.access">权限模式</span></button>
+            <button class="nav-item" data-view="settings" title="设置"><span class="nav-icon">设</span><span class="nav-label" data-i18n="nav.settings">设置</span></button>
+          </div>
+        </nav>
+
+        <div class="sidebar-card">
+          <div class="label">本机服务</div>
+          <div class="health-row">
+            <span id="healthDot" class="dot muted"></span>
+            <span id="healthText" data-i18n="status.notConfigured">正在连接本机服务</span>
+          </div>
+          <button id="refreshAll" class="button secondary full" type="button" data-i18n="action.refreshAll">刷新全部</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <div class="eyebrow" data-i18n="app.eyebrow">本地桥接控制台</div>
+            <h1 data-i18n="app.title">本地工作流控制台</h1>
+            <p data-i18n="app.subtitle">管理项目、文件、补丁、执行任务、日志和修复流程。</p>
+            <div class="toolbar" aria-label="运行状态">
+              <span class="status-chip"><span id="topConnectionDot" class="dot muted"></span><span id="topConnectionText" data-i18n="status.notConfigured">正在连接本机服务</span></span>
+              <span class="status-chip"><span data-i18n="label.execution">运行模式</span>: <strong id="executionChip">未知</strong></span>
+              <span class="status-chip"><span data-i18n="label.permission">权限模式</span>: <strong id="permissionChip">未知</strong></span>
+            </div>
+          </div>
+          <div class="topbar-actions">
+            <div class="segmented" aria-label="语言">
+              <button type="button" data-lang="zh">中文</button>
+              <button type="button" data-lang="en">English</button>
+            </div>
+            <select id="projectSelect" class="select" aria-label="当前项目"></select>
+            <button id="inspectProject" class="button secondary" type="button" data-i18n="action.inspect">检查项目</button>
+            <button id="newCodexJob" class="button primary" type="button" data-i18n="action.newCodexJob">新建任务</button>
+          </div>
+        </header>
+
+        <section id="alert" class="alert hidden"></section>
+
+        <section class="view active" id="view-overview">
+          <div class="page-heading">
+            <div>
+              <h2 data-i18n="overview.title">总览</h2>
+              <p data-i18n="overview.subtitle">先确认连接与权限，再进入项目、补丁、任务和日志流程。</p>
+            </div>
+            <div class="toolbar">
+              <button class="button secondary" type="button" data-go-view="projects" data-i18n="quick.registerProject">注册项目</button>
+              <button class="button secondary" type="button" data-go-view="patches" data-i18n="quick.createPatch">创建补丁</button>
+              <button class="button primary" type="button" data-go-view="jobs" data-i18n="quick.createJob">创建任务</button>
+              <button class="button ghost" type="button" data-go-view="logs" data-i18n="quick.viewLogs">查看日志</button>
+            </div>
+          </div>
+
+          <div class="grid four">
+            <article class="metric-card">
+              <div class="metric-label" data-i18n="metric.connection">服务连接状态</div>
+              <div id="metricConnection" class="metric-value small">正在连接</div>
+            </article>
+            <article class="metric-card">
+              <div class="metric-label" data-i18n="metric.execution">当前运行模式</div>
+              <div id="metricExecution" class="metric-value small">未知</div>
+            </article>
+            <article class="metric-card">
+              <div class="metric-label" data-i18n="metric.permission">当前权限模式</div>
+              <div id="metricMode" class="metric-value small">未知</div>
+            </article>
+            <article class="metric-card">
+              <div class="metric-label" data-i18n="metric.projects">已注册项目</div>
+              <div id="metricProjects" class="metric-value">0</div>
+            </article>
+          </div>
+
+          <div class="grid three">
+            <article class="metric-card">
+              <div class="metric-label" data-i18n="metric.recentJob">最近任务</div>
+              <div id="metricRecentJob" class="metric-value small">无</div>
+            </article>
+            <article class="metric-card">
+              <div class="metric-label" data-i18n="metric.errors">最近错误</div>
+              <div id="metricErrors" class="metric-value">0</div>
+            </article>
+            <article class="metric-card">
+              <div class="metric-label" data-i18n="metric.patches">补丁数量</div>
+              <div id="metricPatches" class="metric-value">0</div>
+            </article>
+          </div>
+
+          <div class="grid two">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2 data-i18n="overview.jobs">最近任务</h2>
+                  <p data-i18n="overview.jobsHint">先用演练模式测试完整流程。</p>
+                </div>
+              </div>
+              <div id="recentJobList" class="item-list empty">暂无任务。</div>
+            </article>
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2 data-i18n="overview.errors">最近错误</h2>
+                  <p data-i18n="overview.errorsHint">有请求编号的错误可以进入修复中心。</p>
+                </div>
+              </div>
+              <div id="recentErrorList" class="item-list empty">暂无错误。</div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-projects">
+          <div class="page-heading">
+            <div>
+              <h2 data-i18n="projects.title">项目</h2>
+              <p data-i18n="projects.subtitle">先注册本地项目根目录，服务只会读写已注册目录内的相对路径。</p>
+            </div>
+          </div>
+          <div class="grid two">
+            <article class="panel">
+              <div class="panel-header"><div><h2 data-i18n="projects.register">注册本地项目</h2><p data-i18n="projects.registerHint">Windows 路径可以包含空格或中文。</p></div></div>
+              <form id="projectForm" class="form">
+                <label><span class="field-label" data-i18n="field.projectName">项目名称</span><input name="name" placeholder="demo-project" data-i18n-placeholder="placeholder.projectName" required /></label>
+                <label><span class="field-label" data-i18n="field.localPath">本地路径</span><input name="path" placeholder="C:\Users\24981\Desktop\gpt-codex-bridge\examples\demo-project" required /></label>
+                <label class="check"><input name="allowShell" type="checkbox" /> <span data-i18n="field.allowShell">允许此项目使用命令行型执行任务</span></label>
+                <button class="button primary" type="submit" data-i18n="action.registerProject">注册项目</button>
+              </form>
+            </article>
+            <article class="panel">
+              <div class="panel-header">
+                <div><h2 data-i18n="projects.context">项目上下文</h2><p data-i18n="projects.contextHint">检查 README、package、git 状态和目录树。</p></div>
+                <button id="loadTree" class="button secondary" type="button" data-i18n="action.loadTree">加载文件树</button>
+              </div>
+              <div id="projectDetail" class="codebox">请选择或注册一个项目。</div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-files">
+          <div class="page-heading">
+            <div>
+              <h2 data-i18n="files.title">文件</h2>
+              <p data-i18n="files.subtitle">读取文件、创建上下文包，并从编辑器生成可审查补丁。</p>
+            </div>
+            <button id="refreshFileTree" class="button secondary" type="button" data-i18n="action.loadTree">加载文件树</button>
+          </div>
+          <div class="grid two wide-left">
+            <article class="panel">
+              <div class="panel-header"><div><h2 data-i18n="files.browser">文件树与读取</h2><p data-i18n="files.browserHint">点击文件树中的文件，或输入项目内相对路径。</p></div></div>
+              <form id="fileReadForm" class="form compact">
+                <label><span class="field-label" data-i18n="field.relativePath">相对文件路径</span><input name="filePath" placeholder="src/App.tsx" required /></label>
+                <button class="button primary" type="submit" data-i18n="action.readFile">读取文件</button>
+              </form>
+              <form id="contextPackForm" class="form compact">
+                <label><span class="field-label" data-i18n="field.selectedPaths">选中文件，逗号分隔</span><input name="paths" placeholder="src/App.tsx, src/styles.css" /></label>
+                <label><span class="field-label" data-i18n="field.notes">备注</span><textarea name="notes" data-i18n-placeholder="placeholder.contextNotes" placeholder="希望网页端关注什么？"></textarea></label>
+                <label class="check"><input name="includeDiff" type="checkbox" /> <span data-i18n="field.includeDiff">包含当前版本差异</span></label>
+                <button class="button secondary" type="submit" data-i18n="action.createContextPack">创建上下文包</button>
+              </form>
+              <div id="fileTreeDetail" class="codebox small">加载项目文件树或读取文件。</div>
+            </article>
+            <article class="panel">
+              <div class="panel-header"><div><h2 data-i18n="files.patchEditor">从当前文件创建补丁</h2><p data-i18n="files.patchHint">创建前请确认目标路径和操作模式。</p></div></div>
+              <form id="filePatchForm" class="form">
+                <label><span class="field-label" data-i18n="field.patchTitle">补丁标题</span><input name="title" placeholder="更新 src/App.tsx" data-i18n-placeholder="placeholder.patchTitle" required /></label>
+                <label><span class="field-label" data-i18n="field.filePath">目标文件路径</span><input name="filePath" placeholder="src/App.tsx" required /></label>
+                <label><span class="field-label" data-i18n="field.mode">操作模式</span><input value="覆盖文件" disabled /></label>
+                <label><span class="field-label" data-i18n="field.rationale">原因</span><textarea name="rationale" placeholder="为什么需要修改这个文件"></textarea></label>
+                <label><span class="field-label" data-i18n="field.fullContent">完整文件内容</span><textarea name="content" class="code-input tall" placeholder="先读取文件，再在这里编辑。" required></textarea></label>
+                <button class="button primary" type="submit" data-i18n="action.createPatchFromEditor">从编辑器创建补丁</button>
+              </form>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-templates">
+          <div class="page-heading">
+            <div><h2 data-i18n="templates.title">模板</h2><p data-i18n="templates.subtitle">用预设任务模板创建更稳定的执行任务。</p></div>
+            <button id="refreshTemplates" class="button secondary" type="button" data-i18n="action.refresh">刷新</button>
+          </div>
+          <div class="grid two">
+            <article class="panel"><div id="templateList" class="item-list empty">暂无模板。</div></article>
+            <article class="panel">
+              <div class="panel-header"><div><h2 data-i18n="templates.verify">验证任务</h2><p data-i18n="templates.verifyHint">根据项目结构推断测试命令，并创建验证任务。</p></div></div>
+              <div class="item-actions">
+                <button id="loadTestPlan" class="button secondary" type="button" data-i18n="action.loadTestPlan">加载测试计划</button>
+                <button id="createTestJob" class="button primary" type="button" data-i18n="action.createTestJob">创建验证任务</button>
+              </div>
+              <div id="templateDetail" class="codebox">请选择项目后加载测试计划。</div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-patches">
+          <div class="page-heading">
+            <div><h2 data-i18n="patches.title">网页补丁</h2><p data-i18n="patches.subtitle">小范围文件替换可以先创建为草案，再由你审查、应用或回滚。</p></div>
+            <button id="refreshPatches" class="button secondary" type="button" data-i18n="action.refresh">刷新</button>
+          </div>
+          <div class="grid two wide-left">
+            <article class="panel">
+              <div class="panel-header"><div><h2 data-i18n="patches.create">创建补丁草案</h2><p data-i18n="patches.createHint">每个补丁都明确目标文件、模式和完整内容。</p></div></div>
+              <form id="patchForm" class="form">
+                <label><span class="field-label" data-i18n="field.patchTitle">补丁标题</span><input name="title" placeholder="改进界面布局" data-i18n-placeholder="placeholder.patchTitle" required /></label>
+                <label><span class="field-label" data-i18n="field.rationale">原因</span><textarea name="rationale" placeholder="为什么要改"></textarea></label>
+                <label><span class="field-label" data-i18n="field.filePath">目标文件路径</span><input name="filePath" placeholder="src/App.tsx" required /></label>
+                <label><span class="field-label" data-i18n="field.mode">操作模式</span><select name="mode" class="select"><option value="overwrite" data-i18n="patchMode.overwrite">覆盖文件</option><option value="create" data-i18n="patchMode.create">新建文件</option></select></label>
+                <label><span class="field-label" data-i18n="field.fullContent">完整文件内容</span><textarea name="content" class="code-input" placeholder="粘贴完整替换内容" required></textarea></label>
+                <button class="button primary" type="submit" data-i18n="action.createPatch">创建补丁草案</button>
+              </form>
+            </article>
+            <article class="panel">
+              <div class="panel-header"><div><h2 data-i18n="patches.queue">补丁队列</h2><p data-i18n="patches.queueHint">应用和回滚都需要确认。</p></div></div>
+              <div id="patchList" class="item-list empty">暂无补丁。</div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-jobs">
+          <div class="page-heading">
+            <div><h2 data-i18n="jobs.title">执行任务</h2><p data-i18n="jobs.subtitle">用于较大实现、测试、审查和修复。演练模式不会真实调用执行器。</p></div>
+            <button id="refreshJobs" class="button secondary" type="button" data-i18n="action.refresh">刷新</button>
+          </div>
+          <div class="grid two wide-left">
+            <article class="panel">
+              <div class="panel-header"><div><h2 data-i18n="jobs.create">创建执行任务</h2><p data-i18n="jobs.createHint">安全等级会影响是否需要人工批准。</p></div></div>
+              <form id="jobForm" class="form">
+                <label><span class="field-label" data-i18n="field.title">标题</span><input name="title" placeholder="验证控制台流程" data-i18n-placeholder="placeholder.jobTitle" required /></label>
+                <label><span class="field-label" data-i18n="field.roles">角色</span><input name="roles" placeholder="前端工程、质量检查，可留空" data-i18n-placeholder="placeholder.roles" /></label>
+                <label><span class="field-label" data-i18n="field.safety">安全等级</span><select name="safetyLevel" class="select"><option value="1" data-i18n="safety.1">1 - 低风险</option><option value="2" data-i18n="safety.2">2 - 中等风险</option><option value="3" data-i18n="safety.3">3 - 高风险</option><option value="4" data-i18n="safety.4">4 - 关键风险</option><option value="5" data-i18n="safety.5">5 - 禁止自动运行</option></select></label>
+                <label><span class="field-label" data-i18n="field.task">任务</span><textarea name="task" class="code-input" placeholder="写清楚要本地执行器完成的任务" data-i18n-placeholder="placeholder.task" required></textarea></label>
+                <button class="button primary" type="submit" data-i18n="action.createJob">创建任务</button>
+              </form>
+            </article>
+            <article class="panel"><div id="jobList" class="item-list empty">暂无任务。</div></article>
+          </div>
+        </section>
+
+        <section class="view" id="view-codex-app">
+          <div class="page-heading">
+            <div><h2 data-i18n="codexApp.title">执行器连接</h2><p data-i18n="codexApp.subtitle">支持演练、命令行和应用服务模式；账号切换由本机执行器自行管理。</p></div>
+            <div class="toolbar"><button id="refreshCodexAccount" class="button primary" type="button" data-i18n="action.refreshAccount">刷新账号信息</button><button id="resetCodexSession" class="button secondary" type="button" data-i18n="action.resetRunner">查看运行说明</button></div>
+          </div>
+          <div class="grid two">
+            <article class="panel">
+              <ol class="steps">
+                <li><span>1</span><div><strong data-i18n="codexApp.step1">演练模式始终可用</strong><small data-i18n="codexApp.step1Hint">先用演练模式测试控制台流程。</small></div></li>
+                <li><span>2</span><div><strong data-i18n="codexApp.step2">命令行模式跟随本机登录状态</strong><small data-i18n="codexApp.step2Hint">本工具不保存、不切换账号。</small></div></li>
+                <li><span>3</span><div><strong data-i18n="codexApp.step3">应用服务模式只同步本工具启动的任务</strong><small data-i18n="codexApp.step3Hint">直接在桌面应用另开的任务不一定自动出现。</small></div></li>
+              </ol>
+            </article>
+            <article class="panel"><div id="codexAccountDetail" class="codebox">暂无账号信息。</div></article>
+          </div>
+        </section>
+
+        <section class="view" id="view-access">
+          <div class="page-heading">
+            <div><h2 data-i18n="access.title">权限模式</h2><p data-i18n="access.subtitle">当前模式显示在顶部和总览。完全访问需要输入确认文本。</p></div>
+          </div>
+          <div class="grid two wide-left">
+            <article class="panel">
+              <div class="mode-grid">
+                <button class="mode-card" data-access-mode="read_only" type="button"><strong data-i18n="mode.read_only">只读检查</strong><span data-i18n="access.readOnly">只读检查，不允许应用补丁，也不允许危险执行。</span></button>
+                <button class="mode-card" data-access-mode="manual_review" type="button"><strong data-i18n="mode.manual_review">人工审查</strong><span data-i18n="access.manual">推荐默认模式，关键动作都需要人工审查。</span></button>
+                <button class="mode-card" data-access-mode="auto_review" type="button"><strong data-i18n="mode.auto_review">自动审查</strong><span data-i18n="access.auto">低风险任务可自动运行，高风险仍需审批。</span></button>
+                <button class="mode-card danger-mode" data-access-mode="full_access" type="button"><strong data-i18n="mode.full_access">完全访问</strong><span data-i18n="access.full">危险模式，会放宽执行限制和自动批准。</span></button>
+              </div>
+              <div class="risk-note" data-i18n="access.fullWarning">完全访问只建议在一次性分支或演示项目使用。开启前必须输入“我已理解风险”。</div>
+            </article>
+            <article class="panel"><div class="panel-header"><div><h2 data-i18n="access.effective">当前生效设置</h2><p data-i18n="access.effectiveHint">包括沙箱、审批、网络和日志级别。</p></div></div><div id="accessModeDetail" class="codebox">暂无配置。</div></article>
+          </div>
+        </section>
+
+        <section class="view" id="view-reviews">
+          <div class="page-heading">
+            <div><h2 data-i18n="reviews.title">交叉审查</h2><p data-i18n="reviews.subtitle">限制网页端和本地执行器的审查轮次，最终必须做决定。</p></div>
+          </div>
+          <div class="grid two wide-left">
+            <article class="panel">
+              <form id="reviewForm" class="form">
+                <label><span class="field-label" data-i18n="field.reviewTitle">审查标题</span><input name="title" placeholder="比较网页补丁与本地审查结果" data-i18n-placeholder="placeholder.reviewTitle" required /></label>
+                <label><span class="field-label" data-i18n="field.webPatchId">网页补丁编号</span><input name="webPatchId" placeholder="可选" data-i18n-placeholder="placeholder.optional" /></label>
+                <label><span class="field-label" data-i18n="field.codexJobId">执行任务编号</span><input name="codexJobId" placeholder="可选" data-i18n-placeholder="placeholder.optional" /></label>
+                <label><span class="field-label" data-i18n="field.webSummary">网页端摘要</span><textarea name="webSummary" placeholder="阻塞问题 / 具体改进 / 证据 / 建议决策" data-i18n-placeholder="placeholder.reviewSummary"></textarea></label>
+                <label><span class="field-label" data-i18n="field.codexSummary">本地执行器摘要</span><textarea name="codexSummary" placeholder="阻塞问题 / 具体改进 / 证据 / 建议决策" data-i18n-placeholder="placeholder.reviewSummary"></textarea></label>
+                <label><span class="field-label" data-i18n="field.maxRounds">最大轮次</span><select name="maxRounds" class="select"><option value="1" data-i18n="reviewRound.1">1 - 快速决定</option><option value="2" selected data-i18n="reviewRound.2">2 - 推荐默认</option><option value="3" data-i18n="reviewRound.3">3 - 最大轮次</option></select></label>
+                <button class="button primary" type="submit" data-i18n="action.createReview">创建有界审查</button>
+              </form>
+            </article>
+            <article class="panel"><div id="reviewList" class="item-list empty">暂无审查。</div></article>
+          </div>
+        </section>
+
+        <section class="view" id="view-diffs">
+          <div class="page-heading"><div><h2 data-i18n="diffs.title">差异查看器</h2><p data-i18n="diffs.subtitle">查看补丁的统一差异，新增和删除行会高亮。</p></div></div>
+          <div class="grid two wide-left">
+            <article class="panel">
+              <form id="diffForm" class="form">
+                <label><span class="field-label" data-i18n="field.patchId">补丁编号</span><input name="patchId" placeholder="补丁编号" data-i18n-placeholder="placeholder.patchId" required /></label>
+                <button class="button primary" type="submit" data-i18n="action.loadDiff">加载差异</button>
+              </form>
+            </article>
+            <article class="panel"><div id="diffDetail" class="codebox diffbox">暂无差异。</div></article>
+          </div>
+        </section>
+
+        <section class="view" id="view-approvals">
+          <div class="page-heading"><div><h2 data-i18n="approvals.title">审批</h2><p data-i18n="approvals.subtitle">应用服务模式请求命令或文件变更批准时会出现在这里。</p></div></div>
+          <article class="panel"><div id="approvalList" class="item-list empty">暂无审批。</div></article>
+        </section>
+
+        <section class="view" id="view-github">
+          <div class="page-heading"><div><h2 data-i18n="github.title">代码同步</h2><p data-i18n="github.subtitle">通过本机 git 和 GitHub 命令行执行分支、提交和拉取请求辅助操作。</p></div></div>
+          <div class="grid two wide-left">
+            <article class="panel">
+              <form id="branchForm" class="form"><label><span class="field-label" data-i18n="field.branch">新分支</span><input name="branchName" placeholder="chatgpt/dashboard-polish" required /></label><button class="button primary" type="submit" data-i18n="action.createBranch">创建并切换分支</button></form>
+              <hr />
+              <form id="commitForm" class="form"><label><span class="field-label" data-i18n="field.commitMessage">提交消息</span><input name="message" placeholder="feat: improve dashboard usability" required /></label><label class="check"><input name="addAll" type="checkbox" /> <span data-i18n="field.addAll">提交前执行 git add -A</span></label><button class="button secondary" type="submit" data-i18n="action.commit">提交</button></form>
+              <hr />
+              <form id="prForm" class="form"><label><span class="field-label" data-i18n="field.prTitle">拉取请求标题</span><input name="title" required /></label><label><span class="field-label" data-i18n="field.prBody">拉取请求正文</span><textarea name="body"></textarea></label><label><span class="field-label" data-i18n="field.baseBranch">目标分支</span><input name="base" value="main" /></label><label class="check"><input name="draft" type="checkbox" checked /> <span data-i18n="field.draftPr">创建草稿拉取请求</span></label><button class="button primary" type="submit" data-i18n="action.createPr">创建拉取请求</button></form>
+            </article>
+            <article class="panel"><div id="githubDetail" class="codebox">暂无 GitHub 输出。</div></article>
+          </div>
+        </section>
+
+        <section class="view" id="view-screenshots">
+          <div class="page-heading"><div><h2 data-i18n="screenshots.title">界面截图</h2><p data-i18n="screenshots.subtitle">创建任务，让本地执行器使用浏览器工具检查界面。</p></div></div>
+          <div class="grid two wide-left">
+            <article class="panel">
+              <form id="screenshotForm" class="form">
+                <label><span class="field-label" data-i18n="field.url">网址</span><input name="url" placeholder="http://localhost:3000/login" data-i18n-placeholder="placeholder.url" /></label>
+                <label><span class="field-label" data-i18n="field.runCommand">运行命令</span><input name="runCommand" placeholder="npm run dev" data-i18n-placeholder="placeholder.runCommand" /></label>
+                <label><span class="field-label" data-i18n="field.screenshotPaths">已有截图路径</span><textarea name="screenshotPaths" placeholder="截图路径，可选，多个用逗号分隔" data-i18n-placeholder="placeholder.screenshotPaths"></textarea></label>
+                <label><span class="field-label" data-i18n="field.notes">备注</span><textarea name="notes" placeholder="希望本地执行器检查什么？"></textarea></label>
+                <button class="button primary" type="submit" data-i18n="action.createScreenshotJob">创建截图审查任务</button>
+              </form>
+            </article>
+            <article class="panel">
+              <ol class="steps">
+                <li><span>1</span><div><strong data-i18n="screenshots.step1">运行目标应用</strong><small data-i18n="screenshots.step1Hint">使用项目自己的 dev server。</small></div></li>
+                <li><span>2</span><div><strong data-i18n="screenshots.step2">创建截图任务</strong><small data-i18n="screenshots.step2Hint">本地执行器捕获或检查界面，并返回聚焦问题。</small></div></li>
+                <li><span>3</span><div><strong data-i18n="screenshots.step3">进入有界审查</strong><small data-i18n="screenshots.step3Hint">不要让双方无限互审。</small></div></li>
+              </ol>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-repairs">
+          <div class="page-heading">
+            <div><h2 data-i18n="repairs.title">修复中心</h2><p data-i18n="repairs.subtitle">把带请求编号的错误转成可审查修复方案，批准后创建修复任务。</p></div>
+            <div class="toolbar"><button id="loadLatestErrors" class="button secondary" type="button" data-i18n="action.loadLatestErrors">读取最新错误</button><button id="fillRepairFromLatest" class="button primary" type="button" data-i18n="action.fillRepair">从最新错误生成草案</button></div>
+          </div>
+          <div class="grid two wide-left">
+            <article class="panel">
+              <form id="repairForm" class="form">
+                <label><span class="field-label" data-i18n="field.sourceKind">来源类型</span><select name="sourceKind" class="select"><option value="http_error" data-i18n="source.http_error">接口错误</option><option value="job_failure" data-i18n="source.job_failure">任务失败</option><option value="manual" data-i18n="source.manual">手动输入</option></select></label>
+                <label><span class="field-label" data-i18n="field.requestId">请求编号</span><input name="sourceRequestId" placeholder="可选，请求编号" data-i18n-placeholder="placeholder.requestId" /></label>
+                <label><span class="field-label" data-i18n="field.errorSummary">错误摘要</span><input name="errorSummary" required /></label>
+                <label><span class="field-label" data-i18n="field.diagnosis">简短诊断</span><textarea name="conciseDiagnosis" required></textarea></label>
+                <label><span class="field-label" data-i18n="field.solution">解决方案</span><textarea name="solution" required></textarea></label>
+                <label><span class="field-label" data-i18n="field.executionPlan">执行计划</span><textarea name="executionPlan" placeholder="每行一步" required></textarea></label>
+                <label><span class="field-label" data-i18n="field.codexTask">执行任务</span><textarea name="codexTask" placeholder="可选；为空时后端会从诊断生成"></textarea></label>
+                <label><span class="field-label" data-i18n="field.safety">安全等级</span><select name="safetyLevel" class="select"><option value="1" data-i18n="safety.1">1 - 低风险</option><option value="2" selected data-i18n="safety.2">2 - 中等风险</option><option value="3" data-i18n="safety.3">3 - 高风险</option><option value="4" data-i18n="safety.4">4 - 关键风险</option><option value="5" data-i18n="safety.5">5 - 禁止自动运行</option></select></label>
+                <button class="button primary" type="submit" data-i18n="action.createRepair">创建修复方案</button>
+              </form>
+            </article>
+            <article class="panel">
+              <div id="repairSourceDetail" class="codebox">暂无错误。</div>
+              <div id="repairList" class="item-list empty">暂无修复方案。</div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-logs">
+          <div class="page-heading">
+            <div><h2 data-i18n="logs.title">日志</h2><p data-i18n="logs.subtitle">查看最近日志，按级别和请求编号搜索。</p></div>
+            <div class="toolbar">
+              <select id="logLevelFilter" class="select" aria-label="日志级别"><option value="" data-i18n="logs.allLevels">全部级别</option><option value="info" data-i18n="level.info">信息</option><option value="warn" data-i18n="level.warn">警告</option><option value="error" data-i18n="level.error">错误</option></select>
+              <input id="logSearch" placeholder="请求编号 / 关键字" data-i18n-placeholder="placeholder.searchLogs" />
+              <button id="refreshLogs" class="button secondary" type="button" data-i18n="action.refresh">刷新</button>
+              <button id="copyLogs" class="button secondary" type="button" data-i18n="action.copyLogs">复制日志</button>
+              <button id="clearLogs" class="button danger" type="button" data-i18n="action.clearLogs">清空日志</button>
+            </div>
+          </div>
+          <div class="grid two wide-left">
+            <article class="panel"><div class="item-meta"><span data-i18n="logs.count">当前显示</span>: <span id="logCount">0</span></div><div id="logList" class="item-list empty">暂无日志。</div></article>
+            <article class="panel"><div id="diagnosticsDetail" class="codebox">暂无诊断信息。</div></article>
+          </div>
+        </section>
+
+        <section class="view" id="view-knowledge">
+          <div class="page-heading"><div><h2 data-i18n="knowledge.title">角色与技能</h2><p data-i18n="knowledge.subtitle">查看网页端路由角色和本地技能。</p></div></div>
+          <div class="grid two">
+            <article class="panel"><div class="panel-header"><div><h2 data-i18n="knowledge.roles">角色协议</h2></div></div><div id="roleList" class="item-list empty">暂无角色。</div></article>
+            <article class="panel"><div class="panel-header"><div><h2 data-i18n="knowledge.skills">本地技能</h2></div></div><div id="skillList" class="item-list empty">暂无技能。</div></article>
+          </div>
+        </section>
+
+        <section class="view" id="view-settings">
+          <div class="page-heading"><div><h2 data-i18n="settings.title">设置</h2><p data-i18n="settings.subtitle">连接和令牌会自动准备好；通常只需要选择运行模式和权限模式。</p></div></div>
+          <article class="panel narrow">
+            <form id="settingsForm" class="form">
+              <label><span class="field-label" data-i18n="field.baseUrl">本机服务地址</span><input name="baseUrl" placeholder="http://localhost:8787" readonly required /></label>
+              <label><span class="field-label" data-i18n="field.localToken">本机访问令牌</span><input name="token" type="text" placeholder="自动生成" readonly spellcheck="false" /></label>
+              <p class="note" data-i18n="settings.tokenHint">这是本机自动生成的访问令牌，只在你的电脑上使用。通常不用复制或修改；需要换一个时点击“重新生成令牌”。</p>
+              <label>
+                <span class="field-label" data-i18n="field.executionMode">执行模式</span>
+                <select name="execution" class="select">
+                  <option value="dry-run">演练模式</option>
+                  <option value="cli">命令行模式</option>
+                  <option value="app-server">应用服务模式</option>
+                </select>
+              </label>
+              <label>
+                <span class="field-label" data-i18n="field.permissionMode">权限模式</span>
+                <select name="permissionMode" class="select">
+                  <option value="read_only">只读检查</option>
+                  <option value="manual_review">人工审查</option>
+                  <option value="auto_review">自动审查</option>
+                  <option value="full_access">完全访问</option>
+                </select>
+              </label>
+              <p class="note" data-i18n="settings.runtimeHint">默认端口是 8787。执行模式和权限模式可以在这里直接选择；访问令牌由本机自动生成，不需要手动和文件对照。</p>
+              <div class="toolbar">
+                <button class="button primary" type="submit" data-i18n="action.saveSettings">保存设置</button>
+                <button id="testConnection" class="button secondary" type="button" data-i18n="action.testConnection">测试连接</button>
+                <button id="regenerateToken" class="button secondary" type="button" data-i18n="action.regenerateToken">重新生成令牌</button>
+                <button id="clearSettings" class="button ghost" type="button" data-i18n="action.clearSettings">重新读取本机配置</button>
+              </div>
+              <div id="settingsStatus" class="codebox">正在读取本机连接设置。</div>
+            </form>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

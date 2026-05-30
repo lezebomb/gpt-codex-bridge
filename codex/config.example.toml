@@ -1,0 +1,34 @@
+# Example Codex MCP config.
+# Copy relevant sections into ~/.codex/config.toml and replace paths/tokens.
+
+[mcp_servers.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/ABS/PATH/TO/ALLOWED/PROJECTS"]
+
+[mcp_servers.git]
+command = "uvx"
+args = ["mcp-server-git"]
+
+[mcp_servers.sequential-thinking]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+
+[mcp_servers.fetch]
+command = "uvx"
+args = ["mcp-server-fetch"]
+
+[mcp_servers.playwright]
+command = "npx"
+args = ["@playwright/mcp@latest"]
+
+# Requires a GitHub PAT. Prefer read-only or narrow scopes where possible.
+[mcp_servers.github]
+command = "docker"
+args = ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "-e", "GITHUB_TOOLSETS", "ghcr.io/github/github-mcp-server"]
+env = { GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_PERSONAL_ACCESS_TOKEN}", GITHUB_TOOLSETS = "context,repos,issues,pull_requests,actions" }
+
+# Context7: get up-to-date library docs. API key recommended.
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp@latest"]
+env = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }

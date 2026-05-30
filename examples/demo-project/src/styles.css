@@ -1,0 +1,66 @@
+:root {
+  font-family: Inter, system-ui, sans-serif;
+  color: #111827;
+  background: #f5f7fb;
+}
+
+body {
+  margin: 0;
+}
+
+.page-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+}
+
+.hero-card {
+  max-width: 720px;
+  padding: 48px;
+  border-radius: 28px;
+  background: white;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.12);
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  color: #5b5ee6;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(36px, 7vw, 72px);
+  line-height: 0.95;
+  letter-spacing: -0.06em;
+}
+
+.summary {
+  margin: 20px 0 0;
+  color: #5f6b7a;
+  font-size: 18px;
+  line-height: 1.6;
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 18px;
+  color: white;
+  background: #5b5ee6;
+  font-weight: 700;
+}
+
+button.secondary {
+  color: #111827;
+  background: #eef1f6;
+}

@@ -1,0 +1,27 @@
+{
+  "name": "chatgpt-codex-orchestrator-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc",
+    "check:public": "node --check public/app.js",
+    "smoke": "node scripts/smoke-test.mjs",
+    "ui:smoke": "playwright test scripts/dashboard-ui.spec.mjs --reporter=list"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "latest",
+    "express": "latest",
+    "nanoid": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/express": "latest",
+    "@types/node": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}

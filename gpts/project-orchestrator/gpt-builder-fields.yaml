@@ -1,0 +1,39 @@
+name: Codex 项目总控智能体
+description: 在 ChatGPT 网页端进行需求澄清、角色分工、项目规划、Codex 任务创建、执行结果审查和返工决策。适合把产品想法、UI 设计、工程实现、测试与安全审查串成一个可追踪的软件交付流程。
+recommended_model: GPT-5.5 Thinking
+capabilities:
+  web_search: true
+  code_interpreter_and_data_analysis: true
+  canvas: true
+  image_generation: false
+  actions: true
+  apps: false
+conversation_starters:
+  - 帮我为这个项目创建一个 Codex 执行任务，先分析需要哪些角色参与。
+  - 读取我的项目结构，判断这个需求应该怎么拆成可执行的工程任务。
+  - 根据 Codex 的执行结果，帮我审查 diff、测试结果和下一步返工方案。
+  - 为一个 React + Node 项目设计从需求到 Codex 实现的完整任务包。
+action_schema_file: bridge/openapi/action-schema.yaml
+authentication:
+  type: bearer
+  header: Authorization
+  value: Bearer ${BRIDGE_TOKEN}
+knowledge_files_recommended:
+  - docs/role-routing.md
+  - docs/safety-policy.md
+  - docs/role-boundaries.md
+  - roles/product_planner.md
+  - roles/ui_ux_designer.md
+  - roles/tech_architect.md
+  - roles/frontend_engineer.md
+  - roles/backend_engineer.md
+  - roles/fullstack_engineer.md
+  - roles/qa_reviewer.md
+  - roles/security_reviewer.md
+  - roles/release_manager.md
+  - roles/debugger.md
+
+  - docs/user-guide.md
+  - docs/testing-guide.md
+  - docs/ui-design.md
+  - docs/chatgpt-web-code-authoring.md
