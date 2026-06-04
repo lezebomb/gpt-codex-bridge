@@ -5,6 +5,7 @@ import { CONTEXT_PACKS_DIR, MAX_CONTEXT_FILES, ROLE_DIR } from "../../config.js"
 import { ensureDir, filePreview, now, uniqueStrings, writeJsonFile } from "../../lib/common.js";
 import { ContextPackRecord, Project } from "../../types.js";
 import { findReadmePreview, inferTechStack, readProjectFile, walkFiles } from "../../project-files.js";
+import { formatContextPackFile } from "../context/context-pack-builder.js";
 import { DiffManager } from "./diff-manager.js";
 import { InstructionLoader } from "./instruction-loader.js";
 import { SkillLoader } from "./skill-loader.js";
@@ -32,7 +33,7 @@ export class ContextCollector {
     }));
   }
 
-  async createContextPack(project: Project, options: { taskId?: string; goal?: string; paths?: string[]; includeTree?: boolean; includeGitStatus?: boolean; includeDiff?: boolean }) {
+  async createContextPack(project: Project, options: { taskId?: string; goal?: string; paths?: string[]; includeTree?: boolean; includeGitStatus?: boolean; includeDiff?: boolean; explicitFullRead?: boolean }) {
     ensureDir(CONTEXT_PACKS_DIR);
     const paths = uniqueStrings((options.paths || []).slice(0, MAX_CONTEXT_FILES));
     const files = paths.map((filePath) => readProjectFile(project, filePath));
@@ -98,10 +99,19 @@ export class ContextCollector {
     if (files.length) {
       lines.push("## Relevant Files");
       for (const file of files) {
+        const formatted = formatContextPackFile({ filePath: file.path, content: file.content, explicitFullRead: options.explicitFullRead });
         lines.push(`### ${file.path}`);
-        lines.push("```text");
-        lines.push(file.content);
-        lines.push("```");
+        if (formatted.mode === "inline") {
+          lines.push("```text");
+          lines.push(formatted.content);
+          lines.push("```");
+        } else {
+          lines.push(`Summary: ${formatted.summary}`);
+          lines.push("```text");
+          lines.push(formatted.snippet);
+          lines.push("```");
+          lines.push(formatted.suggestedReadRange);
+        }
         lines.push("");
       }
     }

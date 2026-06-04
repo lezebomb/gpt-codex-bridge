@@ -63,3 +63,15 @@ export function filePreview(filePath: string, max = 4000): string | null {
 export function uniqueStrings(items: string[]): string[] {
   return Array.from(new Set(items.filter(Boolean)));
 }
+
+export function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+export function truncateText(value: string, maxChars: number): string {
+  return value.length <= maxChars ? value : `${value.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
+export function summarizeText(value: string, maxChars: number): string {
+  return truncateText(value.replace(/\s+/g, " ").trim(), maxChars);
+}

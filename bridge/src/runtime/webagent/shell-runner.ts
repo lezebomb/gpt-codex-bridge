@@ -41,7 +41,7 @@ export class ShellRunner {
     return record;
   }
 
-  create(project: Project, input: { taskId?: string; command: string; cwd?: string; timeoutMs?: number; shell?: "powershell" | "cmd" | "bash" }, requestId?: string): ShellCommandRecord {
+  create(project: Project, input: { taskId?: string; taskBranchId?: string; command: string; cwd?: string; timeoutMs?: number; shell?: "powershell" | "cmd" | "bash" }, requestId?: string): ShellCommandRecord {
     const cwd = input.cwd ? path.resolve(project.path, input.cwd) : project.path;
     if (cwd !== project.path && !cwd.startsWith(project.path + path.sep)) {
       throw new Error("cwd escapes project root");
@@ -50,6 +50,7 @@ export class ShellRunner {
       id: nanoid(10),
       projectId: project.id,
       taskId: input.taskId,
+      taskBranchId: input.taskBranchId,
       command: input.command,
       cwd,
       timeoutMs: Math.max(1000, Math.min(10 * 60 * 1000, Number(input.timeoutMs || 60_000))),

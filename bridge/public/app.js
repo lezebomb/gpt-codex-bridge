@@ -144,14 +144,17 @@ const state = {
   projects: [],
   projectId: localStorage.getItem(STORAGE.projectId) || "",
   projectInspect: null,
+  projectIndex: null,
   fileContent: "",
   browse: { currentPath: "", roots: [], directories: [], parentPath: null },
   tasks: [],
+  taskBranches: [],
   taskDetail: null,
   patches: [],
   executionJobs: [],
   approvals: null,
   logs: [],
+  logFilters: { requestId: "" },
   mcpCenter: null,
   executors: null,
   diagnostics: null,
@@ -226,9 +229,9 @@ async function refreshCore() {
     state.projectId = state.projects[0].id;
     localStorage.setItem(STORAGE.projectId, state.projectId);
   }
-  await Promise.all([loadTasks(), loadPatches(), loadExecutionJobs(), loadBrowse()]);
+  await Promise.all([loadTasks(), loadTaskBranches(), loadPatches(), loadExecutionJobs(), loadBrowse()]);
   if (state.projectId) {
-    await loadProjectInspect(state.projectId);
+    await Promise.all([loadProjectInspect(state.projectId), loadProjectIndexStatus(state.projectId)]);
   }
   render();
 }
@@ -245,6 +248,17 @@ async function loadProjectInspect(projectId) {
   render();
 }
 
+async function loadProjectIndexStatus(projectId) {
+  if (!projectId) {
+    state.projectIndex = null;
+    render();
+    return;
+  }
+  const body = await api(`/projects/${projectId}/index-status`);
+  state.projectIndex = body.index || null;
+  render();
+}
+
 async function loadApprovals() {
   state.approvals = await api("/approvals");
   render();
@@ -254,6 +268,13 @@ async function loadTasks() {
   const query = state.projectId ? `?projectId=${encodeURIComponent(state.projectId)}` : "";
   const body = await api(`/tasks${query}`);
   state.tasks = body.tasks || [];
+  render();
+}
+
+async function loadTaskBranches() {
+  const query = state.projectId ? `?projectId=${encodeURIComponent(state.projectId)}` : "";
+  const body = await api(`/task-branches${query}`);
+  state.taskBranches = body.taskBranches || [];
   render();
 }
 
@@ -270,7 +291,9 @@ async function loadExecutionJobs() {
 }
 
 async function loadLogs() {
-  const body = await api("/logs?limit=80");
+  const params = new URLSearchParams({ limit: "80" });
+  if (state.logFilters.requestId) params.set("requestId", state.logFilters.requestId.trim());
+  const body = await api(`/logs?${params.toString()}`);
   state.logs = body.logs || [];
   render();
 }
@@ -307,8 +330,8 @@ function pageSetup() {
           <dt>Cloudflare</dt>
           <dd>https://bridge.your-domain.com/mcp</dd>
           <dt>Auth</dt>
-          <dd>Access token / API key</dd>
-          <dt>Pairing code</dt>
+          <dd>Local pairing code</dd>
+          <dt>Local pairing code</dt>
           <dd><code>${escapeHtml(setup.token || "")}</code></dd>
         </dl>
       </article>
@@ -324,7 +347,7 @@ npm.cmd run dev</pre>
         <h3>ChatGPT Custom MCP</h3>
         <pre>1. Expose http://localhost:8787 with Cloudflare Tunnel
 2. Use https://your-domain/mcp
-3. Choose Access token / API key
+3. Choose Local pairing code
 4. Paste the local pairing code shown here
 5. Start each conversation with get_bridge_status</pre>
       </article>
@@ -351,8 +374,53 @@ function renderBrowseItems(items, allowRegister = false) {
     </div>`).join("")}</div>`;
 }
 
+function formatDateTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+}
+
+function getTaskBranches(taskId) {
+  return state.taskBranches.filter((branch) => branch.taskId === taskId);
+}
+
+function taskBranchOptions(taskId = "") {
+  const branches = taskId ? getTaskBranches(taskId) : state.taskBranches;
+  return branches.map((branch) => `<option value="${branch.id}">${escapeHtml(branch.branchName)} (${escapeHtml(branch.executorMode)})</option>`).join("");
+}
+
+function renderTaskBranches(task) {
+  const branches = getTaskBranches(task.id);
+  if (!branches.length) return `<div class="empty">No branches yet.</div>`;
+  return `<div class="items">${branches.map((branch) => `
+    <div class="item">
+      <header>
+        <div>
+          <h4>${escapeHtml(branch.branchName)}</h4>
+          <p>${escapeHtml(branch.branchGoal || "")}</p>
+        </div>
+        <span class="pill-status ${branch.status}">${escapeHtml(branch.status)}</span>
+      </header>
+      <div class="stack">
+        <span class="tag">executor: ${escapeHtml(branch.executorMode)}</span>
+        <span class="tag">${branch.executorLocked ? "locked" : "switchable"}</span>
+        ${task.activeTaskBranchId === branch.id ? `<span class="tag">active branch</span>` : ""}
+        ${branch.touchedFiles.map((filePath) => `<span class="tag">${escapeHtml(filePath)}</span>`).join("")}
+      </div>
+      <p style="margin: 12px 0 0;">${escapeHtml(branch.executorDecisionReason || "")}</p>
+      <div class="item-actions" style="margin-top: 12px;">
+        ${task.activeTaskBranchId === branch.id ? "" : `<button class="secondary-button" data-set-active-branch="${branch.id}" data-task-id="${task.id}">Set Active</button>`}
+        <button class="ghost-button" data-continue-branch="${branch.id}">Continue</button>
+        <button class="ghost-button" data-branch-conflicts="${branch.id}">Conflicts</button>
+        <button class="ghost-button" data-branch-detail="${branch.id}">Detail</button>
+      </div>
+    </div>
+  `).join("")}</div>`;
+}
+
 function pageProject() {
   const inspect = state.projectInspect?.project;
+  const index = state.projectIndex;
   return `
     <section class="page-header">
       <div>
@@ -390,6 +458,22 @@ function pageProject() {
             gitStatus: inspect.gitStatus?.stdout || "",
             instructions: (inspect.instructions || []).map((item) => ({ path: item.path, scope: item.scope }))
           }, null, 2))}</pre>
+        ` : `<div class="empty">${t("noData")}</div>`}
+      </article>
+      <article class="card">
+        <h3>Context Index</h3>
+        ${state.projectId ? `
+          <div class="stack" style="margin-bottom: 12px;">
+            <span class="tag">status: ${escapeHtml(index?.status || "missing")}</span>
+            <span class="tag">files: ${escapeHtml(index?.indexedFiles ?? 0)}</span>
+            <span class="tag">providers: ${escapeHtml((index?.enabledProviders || []).join(", ") || "none")}</span>
+          </div>
+          <p>Last indexed: ${escapeHtml(formatDateTime(index?.lastIndexedAt) || "not yet")}</p>
+          ${index?.staleFiles?.length ? `<p>Stale files: ${escapeHtml(index.staleFiles.slice(0, 6).join(", "))}</p>` : ""}
+          <div class="item-actions" style="margin-top: 12px;">
+            <button class="secondary-button" data-action="index-project">Index Project</button>
+            <button class="ghost-button" data-action="refresh-index">Refresh Index</button>
+          </div>
         ` : `<div class="empty">${t("noData")}</div>`}
       </article>
       <article class="card">
@@ -452,6 +536,12 @@ function pageTasks() {
               ${state.tasks.map((task) => `<option value="${task.id}">${escapeHtml(task.taskTitle)}</option>`).join("")}
             </select>
           </label>
+          <label>Task branch
+            <select name="taskBranchId">
+              <option value="">active branch</option>
+              ${taskBranchOptions()}
+            </select>
+          </label>
           <label>Title<input name="title" placeholder="Update README copy" /></label>
           <label>File path<input name="filePath" placeholder="README.md" /></label>
           <label>Mode
@@ -482,12 +572,21 @@ function pageTasks() {
               <div class="stack">
                 <span class="tag">mode: ${escapeHtml(task.executorMode)}</span>
                 <span class="tag">policy: ${escapeHtml(task.executorPolicy)}</span>
+                <span class="tag">${task.executorLocked ? "executor locked" : "executor switchable"}</span>
+                ${task.activeTaskBranchId ? `<span class="tag">active: ${escapeHtml(getTaskBranches(task.id).find((branch) => branch.id === task.activeTaskBranchId)?.branchName || task.activeTaskBranchId)}</span>` : ""}
+                ${task.recommendedNextAction ? `<span class="tag">next: ${escapeHtml(task.recommendedNextAction)}</span>` : ""}
                 ${task.conflicts.map((conflict) => `<span class="tag">conflict: ${escapeHtml(conflict.filePath)}</span>`).join("")}
               </div>
+              <p style="margin: 12px 0 0;">${escapeHtml(task.executorDecisionReason || "")}</p>
               <div class="item-actions" style="margin-top: 12px;">
                 <button class="secondary-button" data-create-pack="${task.id}">${t("createPack")}</button>
                 <button class="primary-button" data-create-job="${task.id}">${t("createJob")}</button>
+                <button class="ghost-button" data-create-branch="${task.id}">New Branch</button>
                 <button class="ghost-button" data-task-detail="${task.id}">Detail</button>
+              </div>
+              <div style="margin-top: 12px;">
+                <h4>Branches</h4>
+                ${renderTaskBranches(task)}
               </div>
             </div>
           `).join("") : `<div class="empty">${t("noData")}</div>`}
@@ -611,6 +710,13 @@ function pageLogs() {
       </div>
     </section>
     <article class="card">
+      <form id="logFilterForm" style="margin-bottom: 16px;">
+        <label>requestId<input name="requestId" value="${escapeHtml(state.logFilters.requestId || "")}" placeholder="Filter a failing requestId" /></label>
+        <div class="item-actions" style="margin-top: 12px;">
+          <button class="secondary-button" type="submit">${t("loadLogs")}</button>
+          <button class="ghost-button" type="button" data-action="clear-log-filter">Clear</button>
+        </div>
+      </form>
       <div class="items">
         ${state.logs.length ? state.logs.map((entry) => `
           <div class="item">
@@ -903,10 +1009,27 @@ function bindView() {
   document.getElementById("projectSelect")?.addEventListener("change", async (event) => {
     state.projectId = event.target.value;
     localStorage.setItem(STORAGE.projectId, state.projectId);
-    await loadProjectInspect(state.projectId);
-    await loadTasks();
+    await Promise.all([loadProjectInspect(state.projectId), loadProjectIndexStatus(state.projectId), loadTasks(), loadTaskBranches()]);
   });
   document.querySelector("[data-action='inspect-project']")?.addEventListener("click", () => loadProjectInspect(state.projectId).catch(handleError));
+  document.querySelector("[data-action='index-project']")?.addEventListener("click", async () => {
+    try {
+      await api(`/projects/${state.projectId}/index`, { method: "POST", body: { force: false } });
+      await loadProjectIndexStatus(state.projectId);
+      setAlert("success", "Project indexed");
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  document.querySelector("[data-action='refresh-index']")?.addEventListener("click", async () => {
+    try {
+      await api(`/projects/${state.projectId}/index/refresh`, { method: "POST", body: {} });
+      await loadProjectIndexStatus(state.projectId);
+      setAlert("success", "Index refreshed");
+    } catch (error) {
+      handleError(error);
+    }
+  });
 
   document.getElementById("readFileForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -935,7 +1058,7 @@ function bindView() {
           executorPolicy: form.get("executorPolicy") || undefined
         }
       });
-      await loadTasks();
+      await Promise.all([loadTasks(), loadTaskBranches()]);
       setAlert("success", t("createTask"));
     } catch (error) {
       handleError(error);
@@ -951,6 +1074,7 @@ function bindView() {
         body: {
           projectId: state.projectId,
           taskId: form.get("taskId") || undefined,
+          taskBranchId: form.get("taskBranchId") || undefined,
           title: form.get("title"),
           rationale: form.get("rationale"),
           changes: [{
@@ -970,7 +1094,9 @@ function bindView() {
   document.querySelectorAll("[data-create-pack]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
-        await api(`/tasks/${button.getAttribute("data-create-pack")}/continue`, { method: "POST", body: { createContextPack: true } });
+        const taskId = button.getAttribute("data-create-pack");
+        const task = state.tasks.find((item) => item.id === taskId);
+        await api(`/tasks/${taskId}/continue`, { method: "POST", body: { taskBranchId: task?.activeTaskBranchId, createContextPack: true } });
         setAlert("success", t("createPack"));
       } catch (error) {
         handleError(error);
@@ -981,9 +1107,75 @@ function bindView() {
   document.querySelectorAll("[data-create-job]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
-        await api(`/tasks/${button.getAttribute("data-create-job")}/executions`, { method: "POST", body: { runImmediately: true } });
-        await Promise.all([loadExecutionJobs(), loadTasks(), loadApprovals()]);
+        const taskId = button.getAttribute("data-create-job");
+        const task = state.tasks.find((item) => item.id === taskId);
+        await api(`/tasks/${taskId}/executions`, { method: "POST", body: { taskBranchId: task?.activeTaskBranchId, runImmediately: true } });
+        await Promise.all([loadExecutionJobs(), loadTasks(), loadTaskBranches(), loadApprovals()]);
         setAlert("success", t("createJob"));
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-create-branch]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        const taskId = button.getAttribute("data-create-branch");
+        const branchName = window.prompt("Branch name", "alt-approach");
+        if (!branchName) return;
+        await api(`/tasks/${taskId}/branches`, { method: "POST", body: { branchName } });
+        await Promise.all([loadTasks(), loadTaskBranches()]);
+        setAlert("success", "Task branch created");
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-set-active-branch]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        await api(`/tasks/${button.getAttribute("data-task-id")}/active-branch`, {
+          method: "POST",
+          body: { taskBranchId: button.getAttribute("data-set-active-branch") }
+        });
+        await Promise.all([loadTasks(), loadTaskBranches()]);
+        setAlert("success", "Active branch updated");
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-continue-branch]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        const result = await api(`/task-branches/${button.getAttribute("data-continue-branch")}/continue`, { method: "POST", body: {} });
+        state.taskDetail = result;
+        render();
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-branch-conflicts]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        state.taskDetail = await api(`/task-branches/${button.getAttribute("data-branch-conflicts")}/conflicts`);
+        render();
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-branch-detail]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        state.taskDetail = await api(`/task-branches/${button.getAttribute("data-branch-detail")}`);
+        render();
       } catch (error) {
         handleError(error);
       }
@@ -1135,10 +1327,21 @@ function bindView() {
   });
 
   document.querySelector("[data-action='load-logs']")?.addEventListener("click", () => loadLogs().catch(handleError));
+  document.querySelector("[data-action='clear-log-filter']")?.addEventListener("click", async () => {
+    state.logFilters.requestId = "";
+    await loadLogs();
+  });
   document.querySelector("[data-action='load-bundle']")?.addEventListener("click", () => loadDiagnostics().catch(handleError));
   document.querySelector("[data-action='refresh-approvals']")?.addEventListener("click", () => refreshCore().catch(handleError));
   document.querySelector("[data-action='reload-tasks']")?.addEventListener("click", async () => {
-    await Promise.all([loadTasks(), loadPatches(), loadExecutionJobs()]);
+    await Promise.all([loadTasks(), loadTaskBranches(), loadPatches(), loadExecutionJobs()]);
+  });
+
+  document.getElementById("logFilterForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    state.logFilters.requestId = String(form.get("requestId") || "").trim();
+    await loadLogs();
   });
 
   document.getElementById("runtimeForm")?.addEventListener("submit", async (event) => {

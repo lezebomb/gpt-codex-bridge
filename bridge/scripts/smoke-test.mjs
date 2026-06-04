@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 
 const baseUrl = (process.env.BRIDGE_BASE_URL || `http://localhost:${process.env.BRIDGE_PORT || 8787}`).replace(/\/$/, "");
@@ -40,6 +41,27 @@ async function must(method, route, body) {
   return result.body;
 }
 
+function requestBootstrapWithHost(host, extraHeaders = {}) {
+  const url = new URL(baseUrl);
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: url.hostname,
+      port: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
+      path: "/bootstrap",
+      method: "GET",
+      headers: { Host: host, ...extraHeaders }
+    }, (res) => {
+      let body = "";
+      res.on("data", (chunk) => {
+        body += chunk.toString();
+      });
+      res.on("end", () => resolve({ statusCode: res.statusCode || 0, body }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 async function main() {
   console.log(`Smoke target: ${baseUrl}`);
 
@@ -53,6 +75,10 @@ async function main() {
     token = bootstrap.body.token;
     console.log("bootstrap ok");
   }
+
+  const bootstrapPublic = await requestBootstrapWithHost("bridge.example.com");
+  assert(bootstrapPublic.statusCode === 403, `public host bootstrap should be 403, got ${bootstrapPublic.statusCode}`);
+  console.log("bootstrap security ok");
 
   const config = await must("GET", "/config");
   assert(config.settings?.permissionMode, "missing settings.permissionMode");
@@ -80,6 +106,19 @@ async function main() {
   assert(inspected.project?.project?.id || inspected.project?.project?.path, "inspect response missing project details");
   console.log("inspect ok");
 
+  const indexed = await must("POST", `/projects/${project.id}/index`, { force: true });
+  assert(indexed.index?.indexedFiles > 0, "indexing should record files");
+  console.log(`index ok: ${indexed.index.indexedFiles}`);
+
+  const retrieved = await must("POST", `/projects/${project.id}/retrieve-context`, {
+    query: "Start workflow",
+    purpose: "REST smoke",
+    maxFiles: 4,
+    maxSnippets: 6
+  });
+  assert(retrieved.retrievedContext?.relevantFiles?.length > 0, "retrieve_context should return relevant files");
+  console.log("retrieve context ok");
+
   const file = await must("GET", `/projects/${project.id}/files/read?path=${encodeURIComponent("src/App.tsx")}`);
   assert(file.file?.content?.includes("function") || file.file?.content?.includes("export"), "read_file missing expected content");
   console.log("file read ok");
@@ -94,6 +133,21 @@ async function main() {
   });
   assert(task.task?.id, "task creation missing task id");
   console.log(`task ok: ${task.task.id}`);
+
+  assert(task.defaultTaskBranch?.id, "create_task should create a default task branch");
+  console.log(`default branch ok: ${task.defaultTaskBranch.id}`);
+
+  const secondBranch = await must("POST", `/tasks/${task.task.id}/branches`, {
+    branchName: "rest-smoke-branch",
+    touchedFiles: ["README.md"]
+  });
+  assert(secondBranch.taskBranch?.id, "second task branch missing id");
+  const branchConflicts = await must("GET", `/task-branches/${secondBranch.taskBranch.id}/conflicts`);
+  assert(
+    branchConflicts.conflicts?.overlappingFiles?.map((filePath) => filePath.replaceAll("\\", "/")).includes("README.md"),
+    "branch conflict detection should include README.md"
+  );
+  console.log("branch conflict ok");
 
   const contextPack = await must("POST", `/projects/${project.id}/context-pack`, {
     taskId: task.task.id,

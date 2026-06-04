@@ -14,6 +14,14 @@ export class TaskStore {
       artifacts: input.artifacts || [],
       conflicts: input.conflicts || [],
       claimedFiles: uniqueStrings(input.claimedFiles),
+      taskBranchIds: uniqueStrings(input.taskBranchIds),
+      contextPackIds: uniqueStrings(input.contextPackIds),
+      retrievedContextIds: uniqueStrings(input.retrievedContextIds),
+      patchIds: uniqueStrings(input.patchIds),
+      executionJobIds: uniqueStrings(input.executionJobIds),
+      shellCommandIds: uniqueStrings(input.shellCommandIds),
+      approvals: uniqueStrings(input.approvals),
+      logs: uniqueStrings(input.logs),
       createdAt: now(),
       updatedAt: now()
     };
@@ -75,6 +83,7 @@ export class TaskStore {
     return this.update(taskId, (task) => {
       task.artifacts.push(artifact);
       if (artifact.type === "context_pack") task.contextPackIds.push(artifact.id);
+      if (artifact.type === "retrieved_context") task.retrievedContextIds.push(artifact.id);
       if (artifact.type === "patch") task.patchIds.push(artifact.id);
       if (artifact.type === "execution_job") task.executionJobIds.push(artifact.id);
       if (artifact.type === "shell_command") task.shellCommandIds.push(artifact.id);

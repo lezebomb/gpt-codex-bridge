@@ -22,6 +22,7 @@ test("dashboard setup, project, tasks, approvals, logs, mcp center, and executor
     await page.goto(`${baseUrl}/dashboard/`);
     await expect(page.getByRole("heading", { name: "ChatGPT Web-first Bridge" })).toBeVisible();
     await expect(page.locator("body")).toContainText("主界面是 ChatGPT 网页端");
+    await expect(page.locator("body")).toContainText("Local pairing code");
 
     await page.locator("[data-action='test-connection']").click();
     await expect(page.locator(".alert.success")).toBeVisible();
@@ -43,6 +44,8 @@ test("dashboard setup, project, tasks, approvals, logs, mcp center, and executor
     await page.locator("#projectSelect").selectOption({ label: "demo-project" });
     await page.locator("[data-action='inspect-project']").click();
     await expect(page.locator("body")).toContainText("demo-project");
+    await page.locator("[data-action='index-project']").click();
+    await expect(page.locator(".alert.success")).toBeVisible();
 
     await page.locator("#readFileForm input[name='path']").fill("src/App.tsx");
     await page.locator("#readFileForm button[type='submit']").click();
@@ -54,6 +57,7 @@ test("dashboard setup, project, tasks, approvals, logs, mcp center, and executor
     await page.locator("#taskForm input[name='targetFiles']").fill("README.md");
     await page.locator("#taskForm button[type='submit']").click();
     await expect(page.locator(".item", { hasText: taskTitle }).first()).toBeVisible();
+    await expect(page.locator(".item", { hasText: taskTitle }).first()).toContainText("Branches");
 
     await page.locator("#patchForm input[name='title']").fill(patchTitle);
     await page.locator("#patchForm input[name='filePath']").fill("README.md");

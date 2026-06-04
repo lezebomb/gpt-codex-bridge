@@ -22,6 +22,48 @@ function isLoopbackRequest(req: Request): boolean {
   return remote === "127.0.0.1" || remote === "::1" || remote === "localhost" || remote === "";
 }
 
+function normalizeHostValue(value: string): string {
+  const trimmed = String(value || "").trim().toLowerCase();
+  if (!trimmed) return "";
+  const withoutProtocol = trimmed.replace(/^[a-z]+:\/\//, "");
+  const hostPort = withoutProtocol.split("/")[0];
+  if (hostPort.startsWith("[")) {
+    const match = hostPort.match(/^\[([^\]]+)\](?::\d+)?$/);
+    return match?.[1] || hostPort;
+  }
+  return hostPort.split(":")[0];
+}
+
+function extractForwardedHost(value: string): string {
+  const match = String(value || "").match(/host=([^;,\s]+)/i);
+  return match?.[1] || "";
+}
+
+function isExplicitLocalHost(value: string): boolean {
+  const normalized = normalizeHostValue(value);
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
+}
+
+function bootstrapAllowsPairingCode(req: Request): boolean {
+  const host = req.header("host") || "";
+  const xForwardedHost = req.header("x-forwarded-host") || "";
+  const forwarded = extractForwardedHost(req.header("forwarded") || "");
+  const origin = req.header("origin") || "";
+  if (!isExplicitLocalHost(host)) {
+    return false;
+  }
+  if (xForwardedHost && !isExplicitLocalHost(xForwardedHost)) {
+    return false;
+  }
+  if (forwarded && !isExplicitLocalHost(forwarded)) {
+    return false;
+  }
+  if (origin && !isExplicitLocalHost(origin)) {
+    return false;
+  }
+  return true;
+}
+
 function isMcpInitializeRequest(body: unknown): boolean {
   if (!body || typeof body !== "object") return false;
   if (Array.isArray(body)) return body.some((item) => isMcpInitializeRequest(item));
@@ -84,7 +126,7 @@ app.get("/health", (_req, res) => {
 });
 
 app.get("/bootstrap", (req, res) => {
-  if (!isLoopbackRequest(req)) {
+  if (!isLoopbackRequest(req) || !bootstrapAllowsPairingCode(req)) {
     res.status(403).json({ error: "bootstrap_is_local_only" });
     return;
   }
@@ -236,14 +278,48 @@ app.get("/projects/:id/files/read", (req, res) => {
   res.json({ file: service.readFile(req.params.id, query.path) });
 });
 
+app.get("/projects/:id/index-status", (req, res) => {
+  res.json({ index: service.getIndexStatus(req.params.id) });
+});
+
+app.post("/projects/:id/index", (req, res) => {
+  const body = z.object({ force: z.boolean().default(false) }).parse(req.body || {});
+  res.status(201).json({ index: service.indexProject({ projectId: req.params.id, force: body.force }) });
+});
+
+app.post("/projects/:id/index/refresh", (req, res) => {
+  res.json({ index: service.refreshContextIndex(req.params.id) });
+});
+
+app.get("/projects/:id/search", (req, res) => {
+  const query = z.object({ query: z.string(), limit: z.coerce.number().int().min(1).max(8).default(5) }).parse(req.query || {});
+  res.json(service.searchProject({ projectId: req.params.id, ...query }));
+});
+
+app.post("/projects/:id/retrieve-context", (req, res) => {
+  const body = z.object({
+    taskId: z.string().optional(),
+    taskBranchId: z.string().optional(),
+    query: z.string(),
+    purpose: z.string().optional(),
+    maxFiles: z.number().int().min(1).max(8).default(6),
+    maxSnippets: z.number().int().min(1).max(20).default(10),
+    includeRules: z.boolean().default(true),
+    includeSkills: z.boolean().default(true)
+  }).parse(req.body || {});
+  res.status(201).json({ retrievedContext: service.retrieveContext({ projectId: req.params.id, ...body }) });
+});
+
 app.post("/projects/:id/context-pack", async (req, res) => {
   const body = z.object({
     taskId: z.string().optional(),
+    taskBranchId: z.string().optional(),
     goal: z.string().optional(),
     paths: z.array(z.string()).default([]),
     includeTree: z.boolean().default(true),
     includeGitStatus: z.boolean().default(true),
-    includeDiff: z.boolean().default(false)
+    includeDiff: z.boolean().default(false),
+    explicitFullRead: z.boolean().default(false)
   }).parse(req.body || {});
   res.status(201).json(await service.createContextPack({ ...body, projectId: req.params.id }));
 });
@@ -279,13 +355,55 @@ app.post("/tasks", (req, res) => {
   res.status(201).json(service.createTask(body));
 });
 
+app.get("/task-branches", (req, res) => {
+  const query = z.object({ projectId: z.string().optional(), taskId: z.string().optional() }).parse(req.query || {});
+  res.json({ taskBranches: service.listTaskBranches(query) });
+});
+
 app.get("/tasks/:id", (req, res) => {
   res.json(service.getTask(req.params.id));
 });
 
+app.post("/tasks/:id/branches", (req, res) => {
+  const body = z.object({
+    branchName: z.string().optional(),
+    branchGoal: z.string().optional(),
+    chatTitleHint: z.string().optional(),
+    touchedFiles: z.array(z.string()).default([])
+  }).parse(req.body || {});
+  res.status(201).json({ taskBranch: service.createTaskBranch({ taskId: req.params.id, ...body }) });
+});
+
 app.post("/tasks/:id/continue", async (req, res) => {
-  const body = z.object({ note: z.string().optional(), relatedConversationHint: z.string().optional(), createContextPack: z.boolean().default(false) }).parse(req.body || {});
+  const body = z.object({ taskBranchId: z.string().optional(), note: z.string().optional(), relatedConversationHint: z.string().optional(), createContextPack: z.boolean().default(false) }).parse(req.body || {});
   res.json(await service.continueTask({ taskId: req.params.id, ...body }));
+});
+
+app.get("/task-branches/:id", (req, res) => {
+  res.json(service.getTaskBranch(req.params.id));
+});
+
+app.post("/task-branches/:id/continue", async (req, res) => {
+  const body = z.object({ note: z.string().optional(), createContextPack: z.boolean().default(false) }).parse(req.body || {});
+  res.json(await service.continueTaskBranch({ taskBranchId: req.params.id, ...body }));
+});
+
+app.post("/task-branches/:id/rename", (req, res) => {
+  const body = z.object({ branchName: z.string(), chatTitleHint: z.string().optional() }).parse(req.body || {});
+  res.json({ taskBranch: service.renameTaskBranch({ taskBranchId: req.params.id, ...body }) });
+});
+
+app.post("/task-branches/:id/archive", (req, res) => {
+  res.json({ taskBranch: service.archiveTaskBranch(req.params.id) });
+});
+
+app.post("/tasks/:id/active-branch", (req, res) => {
+  const body = z.object({ taskBranchId: z.string() }).parse(req.body || {});
+  res.json({ task: service.setActiveTaskBranch({ taskId: req.params.id, taskBranchId: body.taskBranchId }) });
+});
+
+app.get("/task-branches/:id/conflicts", (req, res) => {
+  res.json({ conflicts: service.detectBranchConflicts({ taskBranchId: req.params.id }) });
 });
 
 app.get("/execution-jobs", (_req, res) => {
@@ -294,6 +412,7 @@ app.get("/execution-jobs", (_req, res) => {
 
 app.post("/tasks/:id/executions", async (req, res) => {
   const body = z.object({
+    taskBranchId: z.string().optional(),
     executorMode: z.enum(["webagent", "codex", "hybrid", "external"]).optional(),
     executorPolicy: z.enum(["save_codex_quota", "best_result", "fast", "manual"]).optional(),
     externalExecutorId: z.string().optional(),
@@ -328,6 +447,7 @@ app.post("/web-patches", (req, res) => {
   const body = z.object({
     projectId: z.string(),
     taskId: z.string().optional(),
+    taskBranchId: z.string().optional(),
     title: z.string(),
     rationale: z.string().optional(),
     changes: z.array(z.object({ filePath: z.string(), mode: z.enum(["create", "overwrite"]).default("overwrite"), content: z.string() })).min(1)
@@ -360,6 +480,7 @@ app.post("/run-shell-command", async (req, res) => {
   const body = z.object({
     projectId: z.string(),
     taskId: z.string().optional(),
+    taskBranchId: z.string().optional(),
     command: z.string(),
     cwd: z.string().optional(),
     timeoutMs: z.number().int().min(1000).max(600000).default(60000),

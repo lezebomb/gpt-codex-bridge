@@ -5,7 +5,7 @@ import { RuntimeSettings, executionModeSchema } from "../types.js";
 export class RuntimeStore {
   private normalize(input: unknown): RuntimeSettings {
     const value = input && typeof input === "object" ? (input as Partial<RuntimeSettings>) : {};
-    const token = String(value.token || process.env.BRIDGE_TOKEN || generateLocalToken()).trim();
+    const token = String(value.token || process.env.BRIDGE_PAIRING_CODE || process.env.BRIDGE_TOKEN || generateLocalToken()).trim();
     return {
       token: token || generateLocalToken(),
       execution: executionModeSchema.catch(DEFAULT_EXECUTION).parse(value.execution || DEFAULT_EXECUTION),

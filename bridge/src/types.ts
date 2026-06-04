@@ -6,6 +6,22 @@ export const approvalPolicySchema = z.enum(["never", "onRequest", "unlessTrusted
 export const sandboxModeSchema = z.enum(["readOnly", "workspaceWrite", "dangerFullAccess"]);
 export const executorModeSchema = z.enum(["webagent", "codex", "hybrid", "external"]);
 export const executorPolicySchema = z.enum(["save_codex_quota", "best_result", "fast", "manual"]);
+export const taskStateSchema = z.enum([
+  "draft",
+  "created",
+  "context_index_required",
+  "context_ready",
+  "planning",
+  "patch_proposed",
+  "awaiting_approval",
+  "applied",
+  "verifying",
+  "needs_repair",
+  "completed",
+  "blocked",
+  "failed",
+  "cancelled"
+]);
 export const jobStatusSchema = z.enum([
   "draft",
   "ready",
@@ -17,7 +33,8 @@ export const jobStatusSchema = z.enum([
   "cancelled",
   "rejected"
 ]);
-export const taskStatusSchema = z.enum(["draft", "active", "completed", "blocked", "failed", "cancelled"]);
+export const taskStatusSchema = taskStateSchema;
+export const taskBranchStatusSchema = z.enum(["active", "paused", "archived", "completed", "blocked", "failed"]);
 
 export type JsonObject = Record<string, unknown>;
 export type ExecutionMode = z.infer<typeof executionModeSchema>;
@@ -26,8 +43,10 @@ export type ApprovalPolicy = z.infer<typeof approvalPolicySchema>;
 export type SandboxMode = z.infer<typeof sandboxModeSchema>;
 export type ExecutorMode = z.infer<typeof executorModeSchema>;
 export type ExecutorPolicy = z.infer<typeof executorPolicySchema>;
+export type TaskState = z.infer<typeof taskStateSchema>;
 export type JobStatus = z.infer<typeof jobStatusSchema>;
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
+export type TaskBranchStatus = z.infer<typeof taskBranchStatusSchema>;
 
 export type RuntimeSettings = {
   token: string;
@@ -85,7 +104,7 @@ export type TaskConflict = {
 
 export type TaskArtifact = {
   id: string;
-  type: "context_pack" | "patch" | "execution_job" | "shell_command" | "repair" | "screenshot" | "note";
+  type: "context_pack" | "retrieved_context" | "patch" | "execution_job" | "shell_command" | "repair" | "screenshot" | "note";
   label: string;
   filePaths?: string[];
   meta?: Record<string, unknown>;
@@ -125,18 +144,92 @@ export type TaskRecord = {
   status: TaskStatus;
   executorMode: ExecutorMode;
   executorPolicy: ExecutorPolicy;
+  executorLocked: boolean;
+  executorDecisionReason: string;
+  executorSwitchReason?: string;
+  taskBranchIds: string[];
+  activeTaskBranchId?: string;
   contextPackIds: string[];
+  retrievedContextIds: string[];
   patchIds: string[];
   executionJobIds: string[];
   shellCommandIds: string[];
   approvals: string[];
   logs: string[];
+  decisions: Array<{ at: string; source: "router" | "webagent" | "user" | "system"; summary: string }>;
   artifacts: TaskArtifact[];
   relatedConversationHint?: string;
+  chatTitleHint?: string;
   uiScreenshotRequest?: UiScreenshotRequest;
   claimedFiles: string[];
   conflicts: TaskConflict[];
+  recommendedNextAction?: string;
   summary?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TaskBranchRecord = {
+  id: string;
+  projectId: string;
+  taskId: string;
+  branchName: string;
+  branchGoal: string;
+  chatTitleHint?: string;
+  status: TaskBranchStatus;
+  executorMode: ExecutorMode;
+  executorLocked: boolean;
+  executorDecisionReason: string;
+  executorSwitchReason?: string;
+  baseGitHead?: string;
+  gitBranchName?: string;
+  touchedFiles: string[];
+  patchIds: string[];
+  contextPackIds: string[];
+  retrievedContextIds: string[];
+  approvalIds: string[];
+  logRequestIds: string[];
+  lastActiveAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RetrievedContextSnippet = {
+  filePath: string;
+  text: string;
+  reason: string;
+  score: number;
+};
+
+export type RetrievedContextRecord = {
+  id: string;
+  projectId: string;
+  taskId?: string;
+  taskBranchId?: string;
+  query: string;
+  purpose?: string;
+  conciseSummary: string;
+  relevantFiles: string[];
+  snippets: RetrievedContextSnippet[];
+  rulesSummary: string[];
+  matchedSkills: string[];
+  suggestedNextReads: string[];
+  estimatedTokenBudget: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ProjectIndexRecord = {
+  projectId: string;
+  status: "missing" | "ready" | "stale" | "indexing" | "failed";
+  indexedFiles: number;
+  lastIndexedAt?: string;
+  staleFiles: string[];
+  indexSize: number;
+  enabledProviders: string[];
+  manifestPath?: string;
+  sqlitePath?: string;
+  summariesPath?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -151,6 +244,7 @@ export type WebPatch = {
   id: string;
   projectId: string;
   taskId?: string;
+  taskBranchId?: string;
   title: string;
   rationale: string;
   status: "draft" | "needs_approval" | "applied" | "rejected" | "reverted";
@@ -179,6 +273,7 @@ export type ExecutionJob = {
   id: string;
   projectId: string;
   taskId?: string;
+  taskBranchId?: string;
   title: string;
   executorMode: ExecutorMode;
   executorPolicy: ExecutorPolicy;
@@ -206,6 +301,7 @@ export type ShellCommandRecord = {
   id: string;
   projectId: string;
   taskId?: string;
+  taskBranchId?: string;
   command: string;
   cwd: string;
   timeoutMs: number;
@@ -313,9 +409,12 @@ export type ExternalExecutorConfig = {
 export type BridgeState = {
   projects: Project[];
   tasks: TaskRecord[];
+  taskBranches: TaskBranchRecord[];
   executionJobs: ExecutionJob[];
   webPatches: WebPatch[];
   contextPacks: ContextPackRecord[];
+  retrievedContexts: RetrievedContextRecord[];
+  projectIndexes: ProjectIndexRecord[];
   reviewSessions: ReviewSession[];
   approvalRequests: ApprovalRequest[];
   repairProposals: RepairProposal[];

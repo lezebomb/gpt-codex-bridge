@@ -12,20 +12,80 @@ export type ExecutorRoutingResult = {
   mode: ExecutorMode;
   policy: ExecutorPolicy;
   reasons: string[];
+  recommendedMode?: ExecutorMode;
+  locked: boolean;
 };
+
+function includesAny(goal: string, tokens: string[]) {
+  return tokens.some((token) => goal.includes(token));
+}
 
 export class ExecutorRouter {
   route(input: ExecutorRoutingInput): ExecutorRoutingResult {
     const policy = input.requestedPolicy || "save_codex_quota";
+    const goal = input.goal.toLowerCase();
+    const targetCount = input.targetFiles.length;
+
     if (input.requestedMode) {
-      return { mode: input.requestedMode, policy, reasons: ["User explicitly selected an executor mode."] };
-    }
-    if (input.externalExecutorId) {
-      return { mode: "external", policy: "manual", reasons: ["An external executor id was provided."] };
+      return {
+        mode: input.requestedMode,
+        policy,
+        reasons: ["User explicitly selected an executor mode."],
+        locked: true
+      };
     }
 
-    const goal = input.goal.toLowerCase();
-    const reasons: string[] = [];
+    if (input.externalExecutorId) {
+      return {
+        mode: "external",
+        policy: "manual",
+        reasons: ["An external executor id was provided."],
+        locked: true
+      };
+    }
+
+    if (includesAny(goal, [
+      "directly use codex",
+      "please use codex",
+      "use codex",
+      "run codex",
+      "直接用 codex",
+      "直接让 codex",
+      "请用 codex"
+    ])) {
+      return {
+        mode: "codex",
+        policy,
+        reasons: ["The request explicitly asked for Codex."],
+        locked: true
+      };
+    }
+
+    if (includesAny(goal, [
+      "save quota",
+      "save codex quota",
+      "webagent",
+      "chatgpt web",
+      "网页端",
+      "省额度"
+    ])) {
+      return {
+        mode: "webagent",
+        policy,
+        reasons: ["The request explicitly asked to stay in the web-driven quota-saving flow."],
+        locked: true
+      };
+    }
+
+    if (includesAny(goal, ["hybrid", "cross review", "交叉审查"])) {
+      return {
+        mode: "hybrid",
+        policy: input.requestedPolicy || "best_result",
+        reasons: ["The request mentions a hybrid or cross-review flow."],
+        locked: true
+      };
+    }
+
     const codexHints = [
       "refactor",
       "multi-file",
@@ -47,23 +107,52 @@ export class ExecutorRouter {
       "多文件",
       "集成"
     ];
-    const uiHints = ["ui", "css", "copy", "wording", "component", "layout", "视觉", "样式", "文案", "组件"];
 
-    if (goal.includes("directly use codex") || goal.includes("直接用 codex")) {
-      return { mode: "codex", policy, reasons: ["The request explicitly asked for Codex."] };
+    const uiHints = [
+      "ui",
+      "css",
+      "copy",
+      "wording",
+      "component",
+      "layout",
+      "视觉",
+      "样式",
+      "文案",
+      "组件"
+    ];
+
+    if (includesAny(goal, codexHints) || targetCount > 3) {
+      const reasons = ["The task looks like a multi-file implementation, debugging, test-fix, or dependency-heavy job."];
+      if (policy === "best_result") {
+        return { mode: "codex", policy, reasons, locked: true };
+      }
+      if (policy === "save_codex_quota") {
+        reasons.push("Codex is recommended for depth, but the current policy keeps this task on WebAgent unless the user switches explicitly.");
+        return {
+          mode: "webagent",
+          recommendedMode: "codex",
+          policy,
+          reasons,
+          locked: true
+        };
+      }
+      return { mode: "codex", policy, reasons, locked: true };
     }
-    if (goal.includes("hybrid") || goal.includes("交叉审查") || goal.includes("cross review")) {
-      return { mode: "hybrid", policy: input.requestedPolicy || "best_result", reasons: ["The request mentions a hybrid or cross-review flow."] };
+
+    if (includesAny(goal, uiHints) || targetCount <= 2) {
+      return {
+        mode: policy === "best_result" ? "hybrid" : "webagent",
+        policy,
+        reasons: ["The task looks like a focused UI, copy, CSS, or small-file change."],
+        locked: true
+      };
     }
-    if (codexHints.some((token) => goal.includes(token)) || input.targetFiles.length > 3) {
-      reasons.push("The task looks like a multi-file implementation, debugging, or test-fix job.");
-      return { mode: policy === "save_codex_quota" ? "codex" : policy === "best_result" ? "hybrid" : "codex", policy, reasons };
-    }
-    if (uiHints.some((token) => goal.includes(token)) || input.targetFiles.length <= 2) {
-      reasons.push("The task looks like a focused UI, copy, CSS, or small-file change.");
-      return { mode: policy === "best_result" ? "hybrid" : "webagent", policy, reasons };
-    }
-    reasons.push("Defaulting to WebAgent to save Codex quota.");
-    return { mode: policy === "best_result" ? "hybrid" : "webagent", policy, reasons };
+
+    return {
+      mode: policy === "best_result" ? "hybrid" : "webagent",
+      policy,
+      reasons: ["Defaulting to WebAgent to save Codex quota."],
+      locked: true
+    };
   }
 }

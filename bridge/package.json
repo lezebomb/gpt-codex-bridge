@@ -10,6 +10,10 @@
     "check:public": "node --check public/app.js",
     "smoke": "node scripts/smoke-test.mjs",
     "mcp:smoke": "node scripts/mcp-smoke-test.mjs",
+    "test:bootstrap": "node scripts/bootstrap-security-test.mjs",
+    "test:context-index": "node scripts/context-index-smoke-test.mjs",
+    "test:executor-router": "node scripts/executor-router-test.mjs",
+    "test:webagent-continue": "node scripts/webagent-continue-task-test.mjs",
     "ui:smoke": "playwright test --config=playwright.config.mjs"
   },
   "dependencies": {

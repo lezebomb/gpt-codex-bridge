@@ -42,7 +42,7 @@ export class PatchEngine {
     return patch;
   }
 
-  create(project: Project, input: { taskId?: string; title: string; rationale?: string; changes: WebPatchChange[] }, requestId?: string): WebPatch {
+  create(project: Project, input: { taskId?: string; taskBranchId?: string; title: string; rationale?: string; changes: WebPatchChange[] }, requestId?: string): WebPatch {
     const changes = validatePatchChanges(project, input.changes);
     const conflicts: TaskConflict[] = input.taskId
       ? this.taskStore.detectConflicts(project.id, changes.map((change) => change.filePath), input.taskId)
@@ -51,6 +51,7 @@ export class PatchEngine {
       id: nanoid(10),
       projectId: project.id,
       taskId: input.taskId,
+      taskBranchId: input.taskBranchId,
       title: input.title,
       rationale: input.rationale || "",
       status: "needs_approval",

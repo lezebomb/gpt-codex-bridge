@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 import { nanoid } from "nanoid";
 
 import { CONTEXT_PACKS_DIR, EXTERNAL_EXECUTOR_CONFIG_FILE, HOST, MCP_PLUGINS, PORT, ROLE_DIR, VERSION } from "./config.js";
 import { compactForLog, ensureDir, filePreview, now } from "./lib/common.js";
 import { assertSafeRelativePath, findReadmePreview, inferTechStack, listBrowsableDirectories, listFilesystemRoots, readProjectFile, safeProjectPath } from "./project-files.js";
-import { ApprovalRequest, BridgeState, ContextPackRecord, ExecutionJob, ExecutorMode, ExecutorPacket, ExecutorPolicy, ExternalExecutorConfig, McpPluginRuntimeConfig, Project, RepairProposal, ReviewSession, TaskRecord, UiScreenshotRequest, WebPatch } from "./types.js";
+import { ApprovalRequest, BridgeState, ContextPackRecord, ExecutionJob, ExecutorMode, ExecutorPacket, ExecutorPolicy, ExternalExecutorConfig, McpPluginRuntimeConfig, Project, ProjectIndexRecord, RepairProposal, RetrievedContextRecord, ReviewSession, TaskBranchRecord, TaskRecord, UiScreenshotRequest, WebPatch } from "./types.js";
 import { ExecutorRouter } from "./executors/router.js";
 import { WebAgentExecutor } from "./executors/webagent-executor.js";
 import { HybridExecutor } from "./executors/hybrid-executor.js";
@@ -18,9 +19,12 @@ import { DiffManager } from "./runtime/webagent/diff-manager.js";
 import { ContextCollector } from "./runtime/webagent/context-collector.js";
 import { ApprovalEngine, normalizeSettings } from "./runtime/webagent/approval-engine.js";
 import { PatchEngine } from "./runtime/webagent/patch-engine.js";
+import { TaskBranchStore } from "./runtime/webagent/task-branch-store.js";
 import { ShellRunner } from "./runtime/webagent/shell-runner.js";
 import { TaskStore } from "./runtime/webagent/task-store.js";
 import { UiScreenshotRunner } from "./runtime/webagent/ui-screenshot-runner.js";
+import { ContextRetriever } from "./runtime/context/context-retriever.js";
+import { ProjectIndexer } from "./runtime/context/project-indexer.js";
 import { RuntimeStore } from "./runtime/runtime-store.js";
 import { StateStore } from "./runtime/state-store.js";
 import { LogStore } from "./runtime/log-store.js";
@@ -34,7 +38,10 @@ export class BridgeService {
   readonly skillLoader = new SkillLoader();
   readonly approvalEngine = new ApprovalEngine(() => this.stateStore.readSettings());
   readonly taskStore = new TaskStore(this.stateStore);
+  readonly taskBranchStore = new TaskBranchStore(this.stateStore);
   readonly contextCollector = new ContextCollector(this.diffManager, this.instructionLoader, this.skillLoader);
+  readonly projectIndexer = new ProjectIndexer();
+  readonly contextRetriever = new ContextRetriever(this.projectIndexer, this.instructionLoader, this.skillLoader);
   readonly patchEngine = new PatchEngine(this.stateStore, this.taskStore, this.approvalEngine, this.diffManager, this.logStore);
   readonly shellRunner = new ShellRunner(this.stateStore, this.approvalEngine, this.logStore);
   readonly uiScreenshotRunner = new UiScreenshotRunner(this.logStore);
@@ -75,7 +82,7 @@ export class BridgeService {
       localDashboardUrl: `http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}/dashboard/`,
       localMcpUrl: `http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}/mcp`,
       cloudflareTunnelExample: "https://bridge.your-domain.com/mcp",
-      authModeRecommendation: "Access token / API key",
+      authModeRecommendation: "Local pairing code",
       pairingCodeLabel: "Local pairing code",
       windowsPowerShellQuickStart: [
         "cd .\\bridge",
@@ -86,8 +93,8 @@ export class BridgeService {
       chatgptCustomMcpSteps: [
         "Expose http://localhost:8787 with Cloudflare Tunnel or another HTTPS tunnel.",
         "In ChatGPT Custom MCP, set the server URL to https://your-domain/mcp.",
-        "Use the local pairing code as the access token / API key.",
-        "Start every new conversation by calling get_bridge_status, then bind to projectId/taskId."
+        "Choose Local pairing code and paste the value from the dashboard Setup screen.",
+        "Start every new conversation by calling get_bridge_status, then bind to projectId, taskId, and taskBranchId when continuing work."
       ]
     };
   }
@@ -187,11 +194,24 @@ export class BridgeService {
       ["list_projects", "List registered local projects."],
       ["inspect_project", "Inspect tree, README, package.json, rules, git status, and tech stack."],
       ["read_file", "Read one file inside a registered project root."],
+      ["index_project", "Create or refresh a token-conscious project context index backed by SQLite FTS."],
+      ["get_index_status", "Read indexed file count, last indexed time, stale files, and provider status."],
+      ["search_project", "Search the indexed project context and return concise matches plus snippets."],
+      ["retrieve_context", "Retrieve a small, relevant context bundle for one query instead of dumping full files."],
+      ["refresh_context_index", "Force-refresh the project context index."],
       ["create_context_pack", "Create a bounded context pack for one task goal."],
       ["create_task", "Create a task with executor routing and conflict detection."],
       ["list_tasks", "List tasks."],
       ["get_task", "Read one task and its related state."],
       ["continue_task", "Continue a task in a new conversation."],
+      ["create_task_branch", "Create a new task branch under one task for a separate ChatGPT conversation."],
+      ["list_task_branches", "List task branches by project or task."],
+      ["get_task_branch", "Read one task branch plus linked task, context, and patch state."],
+      ["continue_task_branch", "Continue one task branch and get the recommended next action."],
+      ["rename_task_branch", "Rename one task branch or update its chat title hint."],
+      ["archive_task_branch", "Archive one task branch without deleting history."],
+      ["set_active_task_branch", "Mark one task branch as the active branch for its task."],
+      ["detect_branch_conflicts", "Detect overlapping touched files and stale git-head conflicts across active branches."],
       ["propose_web_patch", "Create a bounded patch draft without writing files immediately."],
       ["get_patch_diff", "Read a patch diff."],
       ["request_apply_patch", "Apply a patch when permission mode allows it, or defer to dashboard approval."],
@@ -283,7 +303,91 @@ export class BridgeService {
     return readProjectFile(project, filePath);
   }
 
-  async createContextPack(input: { projectId: string; taskId?: string; goal?: string; paths?: string[]; includeTree?: boolean; includeGitStatus?: boolean; includeDiff?: boolean }) {
+  private readGitHead(project: Project): string | undefined {
+    const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: project.path, env: process.env, encoding: "utf8" });
+    if (result.status !== 0) {
+      return undefined;
+    }
+    return String(result.stdout || "").trim() || undefined;
+  }
+
+  private deriveTaskState(task: TaskRecord, branch: TaskBranchRecord | undefined): TaskRecord["status"] {
+    if (["completed", "failed", "cancelled", "blocked"].includes(task.status)) {
+      return task.status;
+    }
+    if (!branch) return "created";
+    if (!branch.retrievedContextIds.length && !task.contextPackIds.length) return "context_index_required";
+    if (task.patchIds.length && task.executionJobIds.length && task.executionJobIds.length >= task.patchIds.length) return "verifying";
+    if (task.patchIds.length) return "patch_proposed";
+    if (task.approvals.length) return "awaiting_approval";
+    if (branch.retrievedContextIds.length || task.contextPackIds.length) return "context_ready";
+    return "planning";
+  }
+
+  private recommendedNextAction(task: TaskRecord, branch: TaskBranchRecord | undefined) {
+    const state = this.stateStore.load();
+    const approvalsPending = state.executionJobs.some((job) => job.taskId === task.id && job.status === "needs_approval")
+      || state.shellCommands.some((command) => command.taskId === task.id && command.status === "needs_approval")
+      || state.webPatches.some((patch) => patch.taskId === task.id && patch.status === "needs_approval");
+    const currentGitHead = this.getProjectRecord(task.projectId) ? this.readGitHead(this.getProjectRecord(task.projectId)) : undefined;
+    const conflictDetected = branch
+      ? this.taskBranchStore.detectConflicts({
+          projectId: task.projectId,
+          taskBranchId: branch.id,
+          touchedFiles: branch.touchedFiles,
+          baseGitHead: branch.baseGitHead,
+          currentGitHead
+        })
+      : null;
+    if (conflictDetected?.conflictingBranches.length || (conflictDetected?.baseGitHead && conflictDetected.currentGitHead && conflictDetected.baseGitHead !== conflictDetected.currentGitHead)) {
+      return {
+        recommendedNextAction: "detect_branch_conflicts",
+        approvalNeeded: approvalsPending,
+        conflictDetected: true,
+        conflictSummary: conflictDetected
+      };
+    }
+    if (approvalsPending) {
+      return {
+        recommendedNextAction: "resolve_pending_approvals",
+        approvalNeeded: true,
+        conflictDetected: false,
+        conflictSummary: null
+      };
+    }
+    if (!branch || !branch.retrievedContextIds.length) {
+      return {
+        recommendedNextAction: "retrieve_context",
+        approvalNeeded: false,
+        conflictDetected: false,
+        conflictSummary: null
+      };
+    }
+    if (!task.patchIds.length) {
+      return {
+        recommendedNextAction: "propose_web_patch",
+        approvalNeeded: false,
+        conflictDetected: false,
+        conflictSummary: null
+      };
+    }
+    if (task.patchIds.length && !task.executionJobIds.length) {
+      return {
+        recommendedNextAction: "request_apply_patch",
+        approvalNeeded: false,
+        conflictDetected: false,
+        conflictSummary: null
+      };
+    }
+    return {
+      recommendedNextAction: "verify_or_repair",
+      approvalNeeded: false,
+      conflictDetected: false,
+      conflictSummary: null
+    };
+  }
+
+  async createContextPack(input: { projectId: string; taskId?: string; taskBranchId?: string; goal?: string; paths?: string[]; includeTree?: boolean; includeGitStatus?: boolean; includeDiff?: boolean; explicitFullRead?: boolean }) {
     const project = this.getProject(input.projectId);
     const { record, markdown } = await this.contextCollector.createContextPack(project, input);
     this.stateStore.update((state) => {
@@ -291,6 +395,9 @@ export class BridgeService {
     });
     if (input.taskId) {
       this.taskStore.linkArtifact(input.taskId, { id: record.id, type: "context_pack", label: "Context pack" });
+    }
+    if (input.taskBranchId) {
+      this.taskBranchStore.linkArtifact(input.taskBranchId, { id: record.id, type: "context_pack", label: "Context pack", filePaths: input.paths || [] });
     }
     this.logStore.write({
       level: "info",
@@ -302,6 +409,84 @@ export class BridgeService {
       details: record.summary
     });
     return { contextPackId: record.id, filePath: record.filePath, summary: record.summary, markdown };
+  }
+
+  indexProject(input: { projectId: string; force?: boolean }) {
+    const project = this.getProject(input.projectId);
+    const manifest = this.projectIndexer.indexProject(project, Boolean(input.force));
+    this.stateStore.update((state) => {
+      const existing = state.projectIndexes.find((item) => item.projectId === project.id);
+      if (existing) {
+        Object.assign(existing, manifest);
+      } else {
+        state.projectIndexes.push(manifest);
+      }
+    });
+    return manifest;
+  }
+
+  getIndexStatus(projectId: string): ProjectIndexRecord {
+    const manifest = this.projectIndexer.getStatus(projectId);
+    this.stateStore.update((state) => {
+      const existing = state.projectIndexes.find((item) => item.projectId === projectId);
+      if (existing) {
+        Object.assign(existing, manifest, { updatedAt: now() });
+      } else {
+        state.projectIndexes.push(manifest);
+      }
+    });
+    return manifest;
+  }
+
+  refreshContextIndex(projectId: string) {
+    return this.indexProject({ projectId, force: true });
+  }
+
+  searchProject(input: { projectId: string; query: string; limit?: number }) {
+    const project = this.getProject(input.projectId);
+    const results = this.contextRetriever.retrieve(project, { query: input.query, maxFiles: input.limit, maxSnippets: input.limit, includeRules: false, includeSkills: false });
+    return {
+      query: input.query,
+      results: results.snippets.map((snippet) => ({
+        path: snippet.filePath,
+        score: snippet.score,
+        snippet: snippet.text,
+        matchReason: snippet.reason
+      }))
+    };
+  }
+
+  retrieveContext(input: { projectId: string; taskId?: string; taskBranchId?: string; query: string; purpose?: string; maxFiles?: number; maxSnippets?: number; includeRules?: boolean; includeSkills?: boolean }) {
+    const project = this.getProject(input.projectId);
+    const payload = this.contextRetriever.retrieve(project, input);
+    const record: RetrievedContextRecord = {
+      ...payload,
+      id: nanoid(10),
+      taskId: input.taskId,
+      taskBranchId: input.taskBranchId,
+      createdAt: now(),
+      updatedAt: now()
+    };
+    this.stateStore.update((state) => {
+      state.retrievedContexts.push(record);
+    });
+    if (input.taskId) {
+      this.taskStore.linkArtifact(input.taskId, {
+        id: record.id,
+        type: "retrieved_context",
+        label: `Context retrieval: ${input.query}`,
+        filePaths: record.relevantFiles
+      });
+    }
+    if (input.taskBranchId) {
+      this.taskBranchStore.linkArtifact(input.taskBranchId, {
+        id: record.id,
+        type: "retrieved_context",
+        label: `Context retrieval: ${input.query}`,
+        filePaths: record.relevantFiles
+      });
+    }
+    return record;
   }
 
   createTask(input: { projectId: string; taskTitle?: string; taskGoal: string; executorMode?: ExecutorMode; executorPolicy?: ExecutorPolicy; targetFiles?: string[]; contextPaths?: string[]; relatedConversationHint?: string; createContextPack?: boolean; uiScreenshotRequest?: UiScreenshotRequest }) {
@@ -318,21 +503,52 @@ export class BridgeService {
       projectId: project.id,
       taskTitle: input.taskTitle || input.taskGoal.slice(0, 60),
       taskGoal: input.taskGoal,
-      status: "active",
+      status: "created",
       executorMode: routing.mode,
       executorPolicy: routing.policy,
+      executorLocked: routing.locked,
+      executorDecisionReason: routing.reasons.join(" "),
+      taskBranchIds: [],
       contextPackIds: [],
+      retrievedContextIds: [],
       patchIds: [],
       executionJobIds: [],
       shellCommandIds: [],
       approvals: [],
       logs: [],
+      decisions: [{ at: now(), source: "router", summary: routing.reasons.join(" ") }],
       claimedFiles: targetFiles,
       relatedConversationHint: input.relatedConversationHint,
+      chatTitleHint: input.relatedConversationHint || input.taskTitle || input.taskGoal.slice(0, 60),
       uiScreenshotRequest: input.uiScreenshotRequest,
       summary: routing.reasons.join(" "),
+      recommendedNextAction: "retrieve_context",
       artifacts: [],
       conflicts
+    });
+    const branch = this.taskBranchStore.create({
+      projectId: project.id,
+      taskId: task.id,
+      branchName: "main",
+      branchGoal: task.taskGoal,
+      chatTitleHint: task.chatTitleHint,
+      status: "active",
+      executorMode: task.executorMode,
+      executorLocked: task.executorLocked,
+      executorDecisionReason: task.executorDecisionReason,
+      baseGitHead: this.readGitHead(project),
+      touchedFiles: targetFiles,
+      patchIds: [],
+      contextPackIds: [],
+      retrievedContextIds: [],
+      approvalIds: [],
+      logRequestIds: []
+    });
+    this.taskStore.update(task.id, (current) => {
+      current.taskBranchIds.push(branch.id);
+      current.activeTaskBranchId = branch.id;
+      current.status = this.deriveTaskState(current, branch);
+      current.recommendedNextAction = this.recommendedNextAction(current, branch).recommendedNextAction;
     });
     this.logStore.write({
       level: conflicts.length ? "warn" : "info",
@@ -341,9 +557,9 @@ export class BridgeService {
       message: conflicts.length ? "Task created with file conflict warnings." : "Task created.",
       projectId: project.id,
       taskId: task.id,
-      details: { taskId: task.id, executorMode: task.executorMode, executorPolicy: task.executorPolicy, conflicts }
+      details: { taskId: task.id, taskBranchId: branch.id, executorMode: task.executorMode, executorPolicy: task.executorPolicy, conflicts }
     });
-    return { task, routing, conflicts, createContextPackSuggested: Boolean(input.contextPaths?.length || targetFiles.length || input.createContextPack) };
+    return { task: this.taskStore.get(task.id), defaultTaskBranch: branch, routing, conflicts, createContextPackSuggested: Boolean(input.contextPaths?.length || targetFiles.length || input.createContextPack) };
   }
 
   listTasks(projectId?: string) {
@@ -355,19 +571,38 @@ export class BridgeService {
     const state = this.stateStore.load();
     return {
       task,
+      taskBranches: state.taskBranches.filter((branch) => branch.taskId === task.id),
       contextPacks: state.contextPacks.filter((pack) => task.contextPackIds.includes(pack.id)),
+      retrievedContexts: state.retrievedContexts.filter((item) => task.retrievedContextIds.includes(item.id)),
       patches: state.webPatches.filter((patch) => task.patchIds.includes(patch.id)),
       executionJobs: state.executionJobs.filter((job) => task.executionJobIds.includes(job.id)),
       shellCommands: state.shellCommands.filter((cmd) => task.shellCommandIds.includes(cmd.id))
     };
   }
 
-  async continueTask(input: { taskId: string; note?: string; relatedConversationHint?: string; createContextPack?: boolean }) {
+  async continueTask(input: { taskId: string; taskBranchId?: string; note?: string; relatedConversationHint?: string; createContextPack?: boolean }) {
+    const state = this.stateStore.load();
+    const branches = state.taskBranches.filter((branch) => branch.taskId === input.taskId && branch.status === "active");
+    if (!input.taskBranchId && branches.length > 1) {
+      return {
+        task: this.taskStore.get(input.taskId),
+        needsBranchSelection: true,
+        activeBranches: branches.map((branch) => ({
+          taskBranchId: branch.id,
+          branchName: branch.branchName,
+          lastActiveAt: branch.lastActiveAt,
+          executorMode: branch.executorMode
+        }))
+      };
+    }
+    const taskBranchId = input.taskBranchId || branches[0]?.id;
     const task = this.taskStore.update(input.taskId, (current) => {
-      current.status = "active";
       if (input.relatedConversationHint) current.relatedConversationHint = input.relatedConversationHint;
       if (input.note) current.summary = input.note;
     });
+    const branch = taskBranchId ? this.taskBranchStore.update(taskBranchId, (current) => {
+      if (input.relatedConversationHint) current.chatTitleHint = input.relatedConversationHint;
+    }) : undefined;
     let contextPack: ContextPackRecord | null = null;
     if (input.createContextPack) {
       const created = await this.createContextPack({
@@ -380,13 +615,122 @@ export class BridgeService {
         includeDiff: false
       });
       contextPack = this.stateStore.load().contextPacks.find((pack) => pack.id === created.contextPackId) || null;
+      if (branch) {
+        this.taskBranchStore.linkArtifact(branch.id, { id: created.contextPackId, type: "context_pack", label: "Context pack", filePaths: task.claimedFiles });
+      }
     }
-    return { task, contextPack };
+    const refreshedTask = this.taskStore.update(task.id, (current) => {
+      current.status = this.deriveTaskState(current, branch);
+      current.recommendedNextAction = this.recommendedNextAction(current, branch).recommendedNextAction;
+      if (branch) current.activeTaskBranchId = branch.id;
+    });
+    const next = this.recommendedNextAction(refreshedTask, branch);
+    return {
+      task: refreshedTask,
+      taskBranch: branch,
+      contextPack,
+      recommendedNextAction: next.recommendedNextAction,
+      approvalNeeded: next.approvalNeeded,
+      conflictDetected: next.conflictDetected,
+      conflictSummary: next.conflictSummary
+    };
   }
 
-  proposeWebPatch(input: { projectId: string; taskId?: string; title: string; rationale?: string; changes: WebPatch["changes"] }, requestId?: string) {
+  createTaskBranch(input: { taskId: string; branchName?: string; branchGoal?: string; chatTitleHint?: string; touchedFiles?: string[] }) {
+    const task = this.taskStore.get(input.taskId);
+    const project = this.getProject(task.projectId);
+    const branch = this.taskBranchStore.create({
+      projectId: project.id,
+      taskId: task.id,
+      branchName: input.branchName || `branch-${task.taskBranchIds.length + 1}`,
+      branchGoal: input.branchGoal || task.taskGoal,
+      chatTitleHint: input.chatTitleHint || task.chatTitleHint,
+      status: "active",
+      executorMode: task.executorMode,
+      executorLocked: task.executorLocked,
+      executorDecisionReason: task.executorDecisionReason,
+      executorSwitchReason: task.executorSwitchReason,
+      baseGitHead: this.readGitHead(project),
+      touchedFiles: (input.touchedFiles || task.claimedFiles).map((filePath) => assertSafeRelativePath(filePath)),
+      patchIds: [],
+      contextPackIds: [],
+      retrievedContextIds: [],
+      approvalIds: [],
+      logRequestIds: []
+    });
+    this.taskStore.update(task.id, (current) => {
+      current.taskBranchIds.push(branch.id);
+      current.activeTaskBranchId = branch.id;
+    });
+    return branch;
+  }
+
+  listTaskBranches(input: { projectId?: string; taskId?: string }) {
+    return this.taskBranchStore.list(input.projectId, input.taskId);
+  }
+
+  getTaskBranch(taskBranchId: string) {
+    const branch = this.taskBranchStore.get(taskBranchId);
+    const state = this.stateStore.load();
+    return {
+      branch,
+      task: this.taskStore.get(branch.taskId),
+      contextPacks: state.contextPacks.filter((pack) => branch.contextPackIds.includes(pack.id)),
+      retrievedContexts: state.retrievedContexts.filter((item) => branch.retrievedContextIds.includes(item.id)),
+      patches: state.webPatches.filter((patch) => branch.patchIds.includes(patch.id))
+    };
+  }
+
+  async continueTaskBranch(input: { taskBranchId: string; note?: string; createContextPack?: boolean }) {
+    const branch = this.taskBranchStore.get(input.taskBranchId);
+    return this.continueTask({
+      taskId: branch.taskId,
+      taskBranchId: branch.id,
+      note: input.note,
+      createContextPack: input.createContextPack
+    });
+  }
+
+  renameTaskBranch(input: { taskBranchId: string; branchName: string; chatTitleHint?: string }) {
+    return this.taskBranchStore.update(input.taskBranchId, (branch) => {
+      branch.branchName = input.branchName.trim() || branch.branchName;
+      if (input.chatTitleHint) branch.chatTitleHint = input.chatTitleHint;
+    });
+  }
+
+  archiveTaskBranch(taskBranchId: string) {
+    return this.taskBranchStore.update(taskBranchId, (branch) => {
+      branch.status = "archived";
+    });
+  }
+
+  setActiveTaskBranch(input: { taskId: string; taskBranchId: string }) {
+    const branch = this.taskBranchStore.get(input.taskBranchId);
+    if (branch.taskId !== input.taskId) throw new Error("task branch does not belong to the task");
+    return this.taskStore.update(input.taskId, (task) => {
+      task.activeTaskBranchId = branch.id;
+    });
+  }
+
+  detectBranchConflicts(input: { taskBranchId: string }) {
+    const branch = this.taskBranchStore.get(input.taskBranchId);
+    const project = this.getProject(branch.projectId);
+    return this.taskBranchStore.detectConflicts({
+      projectId: branch.projectId,
+      taskBranchId: branch.id,
+      touchedFiles: branch.touchedFiles,
+      baseGitHead: branch.baseGitHead,
+      currentGitHead: this.readGitHead(project)
+    });
+  }
+
+  proposeWebPatch(input: { projectId: string; taskId?: string; taskBranchId?: string; title: string; rationale?: string; changes: WebPatch["changes"] }, requestId?: string) {
     const project = this.getProject(input.projectId);
-    return this.patchEngine.create(project, input, requestId);
+    const patch = this.patchEngine.create(project, input, requestId);
+    if (input.taskBranchId) {
+      this.taskBranchStore.linkArtifact(input.taskBranchId, { id: patch.id, type: "patch", label: patch.title, filePaths: patch.changes.map((change) => change.filePath) });
+    }
+    return patch;
   }
 
   getPatchDiff(patchId: string) {
@@ -475,9 +819,10 @@ export class BridgeService {
     return this.stateStore.load().executionJobs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
-  async createExecutionJob(input: { taskId: string; executorMode?: ExecutorMode; executorPolicy?: ExecutorPolicy; externalExecutorId?: string; runImmediately?: boolean }, requestId?: string) {
+  async createExecutionJob(input: { taskId: string; taskBranchId?: string; executorMode?: ExecutorMode; executorPolicy?: ExecutorPolicy; externalExecutorId?: string; runImmediately?: boolean }, requestId?: string) {
     const task = this.taskStore.get(input.taskId);
     const project = this.getProject(task.projectId);
+    const taskBranchId = input.taskBranchId || task.activeTaskBranchId;
     const packet = this.buildPacket(task, project);
     const executorMode = input.executorMode || task.executorMode;
     const executorPolicy = input.executorPolicy || task.executorPolicy;
@@ -492,6 +837,7 @@ export class BridgeService {
       id: nanoid(10),
       projectId: project.id,
       taskId: task.id,
+      taskBranchId,
       title: `${task.taskTitle} (${executorMode})`,
       executorMode,
       executorPolicy,
@@ -510,6 +856,9 @@ export class BridgeService {
       state.executionJobs.push(job);
     });
     this.taskStore.linkArtifact(task.id, { id: job.id, type: "execution_job", label: job.title });
+    if (taskBranchId) {
+      this.taskBranchStore.linkArtifact(taskBranchId, { id: job.id, type: "execution_job", label: job.title, filePaths: task.claimedFiles });
+    }
     this.logStore.write({
       level: "info",
       source: "mcp",
@@ -540,16 +889,22 @@ export class BridgeService {
       projectId: job.projectId,
       taskTitle: job.title,
       taskGoal: job.packet?.taskGoal || job.title,
-      status: "active",
+      status: "planning",
       executorMode: job.executorMode,
       executorPolicy: job.executorPolicy,
+      executorLocked: true,
+      executorDecisionReason: "Created implicitly from an execution job.",
+      taskBranchIds: [],
       contextPackIds: [],
+      retrievedContextIds: [],
       patchIds: [],
       executionJobIds: [job.id],
       shellCommandIds: [],
       approvals: [],
       logs: [],
+      decisions: [{ at: now(), source: "system", summary: "Created implicitly from execution job." }],
       claimedFiles: [],
+      recommendedNextAction: "verify_or_repair",
       artifacts: []
     });
     const project = this.getProject(job.projectId);
@@ -585,7 +940,8 @@ export class BridgeService {
       target.events.push({ at: now(), type: "execution_finished", message: `Executor ${target.executorMode} finished with ${target.exitCode ?? "n/a"}.` });
       if (target.taskId) {
         this.taskStore.update(target.taskId, (taskRecord) => {
-          taskRecord.status = target.status === "completed" ? "completed" : taskRecord.status === "cancelled" ? "cancelled" : "active";
+          taskRecord.status = target.status === "completed" ? "completed" : target.status === "cancelled" ? "cancelled" : target.status === "failed" ? "needs_repair" : "verifying";
+          taskRecord.recommendedNextAction = target.status === "failed" ? "create_repair_proposal" : "verify_or_repair";
         });
       }
       this.logStore.write({
@@ -620,11 +976,14 @@ export class BridgeService {
     });
   }
 
-  async runShellCommand(input: { projectId: string; taskId?: string; command: string; cwd?: string; timeoutMs?: number; shell?: "powershell" | "cmd" | "bash"; runImmediately?: boolean }, requestId?: string) {
+  async runShellCommand(input: { projectId: string; taskId?: string; taskBranchId?: string; command: string; cwd?: string; timeoutMs?: number; shell?: "powershell" | "cmd" | "bash"; runImmediately?: boolean }, requestId?: string) {
     const project = this.getProject(input.projectId);
     const command = this.shellRunner.create(project, input, requestId);
     if (input.taskId) {
       this.taskStore.linkArtifact(input.taskId, { id: command.id, type: "shell_command", label: command.command });
+    }
+    if (input.taskBranchId) {
+      this.taskBranchStore.linkArtifact(input.taskBranchId, { id: command.id, type: "shell_command", label: command.command });
     }
     if (input.runImmediately && !command.requiresApproval) {
       const result = await this.shellRunner.run(command.id, requestId);

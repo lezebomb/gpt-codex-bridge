@@ -76,14 +76,42 @@ export function createMcpServer(service: BridgeService): McpServer {
   registerTool(server, service, "list_projects", "List registered local projects.", {}, () => ({ projects: service.listProjects() }));
   registerTool(server, service, "inspect_project", "Inspect a project tree, README, package.json, git status, rule files, and inferred tech stack.", { projectId: z.string().optional() }, async (args) => ({ project: await service.inspectProject(args.projectId) }));
   registerTool(server, service, "read_file", "Read a file inside a registered project root. Path traversal and absolute paths are blocked.", { projectId: z.string(), filePath: z.string() }, (args) => ({ file: service.readFile(args.projectId, args.filePath) }));
+  registerTool(server, service, "index_project", "Create or refresh a token-conscious project context index backed by SQLite FTS.", {
+    projectId: z.string(),
+    force: z.boolean().default(false)
+  }, (args) => ({ index: service.indexProject(args) }));
+  registerTool(server, service, "get_index_status", "Read indexed file count, last indexed time, stale files, and provider status.", {
+    projectId: z.string()
+  }, (args) => ({ index: service.getIndexStatus(args.projectId) }));
+  registerTool(server, service, "search_project", "Search the indexed project context and return concise matches plus snippets.", {
+    projectId: z.string(),
+    query: z.string(),
+    limit: z.number().int().min(1).max(8).default(5)
+  }, (args) => service.searchProject(args));
+  registerTool(server, service, "retrieve_context", "Retrieve a small, relevant context bundle for one query instead of dumping full files.", {
+    projectId: z.string(),
+    taskId: z.string().optional(),
+    taskBranchId: z.string().optional(),
+    query: z.string(),
+    purpose: z.string().optional(),
+    maxFiles: z.number().int().min(1).max(8).default(6),
+    maxSnippets: z.number().int().min(1).max(20).default(10),
+    includeRules: z.boolean().default(true),
+    includeSkills: z.boolean().default(true)
+  }, (args) => ({ retrievedContext: service.retrieveContext(args) }));
+  registerTool(server, service, "refresh_context_index", "Force-refresh the project context index.", {
+    projectId: z.string()
+  }, (args) => ({ index: service.refreshContextIndex(args.projectId) }));
   registerTool(server, service, "create_context_pack", "Create a bounded context pack with directory summary, selected file snippets, rule summaries, skills, and git status.", {
     projectId: z.string(),
     taskId: z.string().optional(),
+    taskBranchId: z.string().optional(),
     goal: z.string().optional(),
     paths: z.array(z.string()).default([]),
     includeTree: z.boolean().default(true),
     includeGitStatus: z.boolean().default(true),
-    includeDiff: z.boolean().default(false)
+    includeDiff: z.boolean().default(false),
+    explicitFullRead: z.boolean().default(false)
   }, (args) => service.createContextPack(args));
   registerTool(server, service, "create_task", "Create a task bound to one project, with executor routing, conflict detection, and optional context collection hints.", {
     projectId: z.string(),
@@ -100,13 +128,49 @@ export function createMcpServer(service: BridgeService): McpServer {
   registerTool(server, service, "get_task", "Read one task plus related context packs, patches, execution jobs, and shell commands.", { taskId: z.string() }, (args) => service.getTask(args.taskId));
   registerTool(server, service, "continue_task", "Continue a task in a new ChatGPT conversation by reloading MCP-backed task state and optionally refreshing context.", {
     taskId: z.string(),
+    taskBranchId: z.string().optional(),
     note: z.string().optional(),
     relatedConversationHint: z.string().optional(),
     createContextPack: z.boolean().default(false)
   }, (args) => service.continueTask(args));
+  registerTool(server, service, "create_task_branch", "Create a new task branch under one task for a separate ChatGPT conversation.", {
+    taskId: z.string(),
+    branchName: z.string().optional(),
+    branchGoal: z.string().optional(),
+    chatTitleHint: z.string().optional(),
+    touchedFiles: z.array(z.string()).default([])
+  }, (args) => ({ taskBranch: service.createTaskBranch(args) }));
+  registerTool(server, service, "list_task_branches", "List task branches by project or task.", {
+    projectId: z.string().optional(),
+    taskId: z.string().optional()
+  }, (args) => ({ taskBranches: service.listTaskBranches(args) }));
+  registerTool(server, service, "get_task_branch", "Read one task branch plus linked task, context, and patch state.", {
+    taskBranchId: z.string()
+  }, (args) => service.getTaskBranch(args.taskBranchId));
+  registerTool(server, service, "continue_task_branch", "Continue one task branch and get the recommended next action.", {
+    taskBranchId: z.string(),
+    note: z.string().optional(),
+    createContextPack: z.boolean().default(false)
+  }, (args) => service.continueTaskBranch(args));
+  registerTool(server, service, "rename_task_branch", "Rename one task branch or update its chat title hint.", {
+    taskBranchId: z.string(),
+    branchName: z.string(),
+    chatTitleHint: z.string().optional()
+  }, (args) => ({ taskBranch: service.renameTaskBranch(args) }));
+  registerTool(server, service, "archive_task_branch", "Archive one task branch without deleting history.", {
+    taskBranchId: z.string()
+  }, (args) => ({ taskBranch: service.archiveTaskBranch(args.taskBranchId) }));
+  registerTool(server, service, "set_active_task_branch", "Mark one task branch as the active branch for its task.", {
+    taskId: z.string(),
+    taskBranchId: z.string()
+  }, (args) => ({ task: service.setActiveTaskBranch(args) }));
+  registerTool(server, service, "detect_branch_conflicts", "Detect overlapping touched files and stale git-head conflicts across active branches.", {
+    taskBranchId: z.string()
+  }, (args) => ({ conflicts: service.detectBranchConflicts(args) }));
   registerTool(server, service, "propose_web_patch", "Create a bounded patch draft without writing local files immediately.", {
     projectId: z.string(),
     taskId: z.string().optional(),
+    taskBranchId: z.string().optional(),
     title: z.string(),
     rationale: z.string().optional(),
     changes: z.array(z.object({ filePath: z.string(), mode: z.enum(["create", "overwrite"]).default("overwrite"), content: z.string() })).min(1)
@@ -117,6 +181,7 @@ export function createMcpServer(service: BridgeService): McpServer {
   registerTool(server, service, "run_shell_command", "Create a shell command request with timeout, cwd, stdout/stderr capture, and dangerous-command blocking.", {
     projectId: z.string(),
     taskId: z.string().optional(),
+    taskBranchId: z.string().optional(),
     command: z.string(),
     cwd: z.string().optional(),
     timeoutMs: z.number().int().min(1000).max(600000).default(60000),
@@ -125,6 +190,7 @@ export function createMcpServer(service: BridgeService): McpServer {
   }, (args, requestId) => service.runShellCommand(args, requestId));
   registerTool(server, service, "create_execution_job", "Create an executor job using WebAgent, Codex, Hybrid, or External routing for one task.", {
     taskId: z.string(),
+    taskBranchId: z.string().optional(),
     executorMode: z.enum(["webagent", "codex", "hybrid", "external"]).optional(),
     executorPolicy: z.enum(["save_codex_quota", "best_result", "fast", "manual"]).optional(),
     externalExecutorId: z.string().optional(),

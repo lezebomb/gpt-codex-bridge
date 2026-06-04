@@ -94,9 +94,11 @@ async function main() {
 
   const toolsResponse = await mcpPost({ jsonrpc: "2.0", id: rpcId++, method: "tools/list", params: {} }, sessionId);
   const tools = toolsResponse.body.result?.tools || [];
-  assert(tools.length >= 24, `expected at least 24 tools, got ${tools.length}`);
+  assert(tools.length >= 36, `expected at least 36 tools, got ${tools.length}`);
   assert(tools.some((tool) => tool.name === "create_task"), "create_task missing");
   assert(tools.some((tool) => tool.name === "create_execution_job"), "create_execution_job missing");
+  assert(tools.some((tool) => tool.name === "retrieve_context"), "retrieve_context missing");
+  assert(tools.some((tool) => tool.name === "create_task_branch"), "create_task_branch missing");
   console.log(`tools/list ok: ${tools.length} tools`);
 
   const status = await callTool(sessionId, "get_bridge_status");
@@ -111,6 +113,18 @@ async function main() {
   assert(selected.projectId, "select_project missing projectId");
   console.log(`select_project ok: ${selected.projectId}`);
 
+  const indexed = await callTool(sessionId, "index_project", { projectId: selected.projectId, force: true });
+  assert(indexed.index?.indexedFiles > 0, "index_project should index files");
+  console.log(`index_project ok: ${indexed.index.indexedFiles}`);
+
+  const retrieved = await callTool(sessionId, "retrieve_context", {
+    projectId: selected.projectId,
+    query: "Start workflow",
+    purpose: "MCP smoke"
+  });
+  assert(retrieved.retrievedContext?.relevantFiles?.length > 0, "retrieve_context should return relevant files");
+  console.log(`retrieve_context ok: ${retrieved.retrievedContext.relevantFiles.length}`);
+
   const task = await callTool(sessionId, "create_task", {
     projectId: selected.projectId,
     taskTitle: "MCP smoke task",
@@ -120,8 +134,23 @@ async function main() {
   assert(task.task?.id, "create_task missing task id");
   console.log(`create_task ok: ${task.task.id}`);
 
+  const branch = await callTool(sessionId, "create_task_branch", {
+    taskId: task.task.id,
+    branchName: "mcp-smoke-branch",
+    touchedFiles: ["README.md"]
+  });
+  assert(branch.taskBranch?.id, "create_task_branch missing branch id");
+  console.log(`create_task_branch ok: ${branch.taskBranch.id}`);
+
+  const continued = await callTool(sessionId, "continue_task_branch", {
+    taskBranchId: branch.taskBranch.id
+  });
+  assert(continued.recommendedNextAction, "continue_task_branch should return recommendedNextAction");
+  console.log(`continue_task_branch ok: ${continued.recommendedNextAction}`);
+
   const execution = await callTool(sessionId, "create_execution_job", {
     taskId: task.task.id,
+    taskBranchId: branch.taskBranch.id,
     executorMode: "webagent",
     runImmediately: true
   });
