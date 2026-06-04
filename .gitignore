@@ -10,3 +10,5 @@ bridge/playwright-report/
 release/
 **/.chatgpt-codex/
 .DS_Store
+
+*.zip
