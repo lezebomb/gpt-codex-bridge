@@ -1,22 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 import { nanoid } from "nanoid";
 
-import { compactForLog, now } from "../../lib/common.js";
-import { Project, TaskConflict, WebPatch, WebPatchChange } from "../../types.js";
+import { compactForLog, normalizePathSlashes, now, sha256Text } from "../../lib/common.js";
+import { PatchConflictStatus, Project, TaskConflict, WebPatch, WebPatchChange } from "../../types.js";
 import { readJsonFile, writeJsonFile } from "../../lib/common.js";
 import { resolveProjectFile, validatePatchChanges } from "../../project-files.js";
 import { LogStore } from "../log-store.js";
 import { StateStore } from "../state-store.js";
 import { ApprovalEngine } from "./approval-engine.js";
 import { DiffManager } from "./diff-manager.js";
+import { TaskBranchStore } from "./task-branch-store.js";
 import { TaskStore } from "./task-store.js";
 
 export class PatchEngine {
   constructor(
     private readonly stateStore: StateStore,
     private readonly taskStore: TaskStore,
+    private readonly taskBranchStore: TaskBranchStore,
     private readonly approvalEngine: ApprovalEngine,
     private readonly diffManager: DiffManager,
     private readonly logStore: LogStore
@@ -28,6 +31,25 @@ export class PatchEngine {
 
   private metadataPath(project: Project, patchId: string): string {
     return path.join(this.backupDir(project, patchId), "metadata.json");
+  }
+
+  private readGitHead(project: Project): string | undefined {
+    const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: project.path, env: process.env, encoding: "utf8" });
+    if (result.status !== 0) {
+      return undefined;
+    }
+    return String(result.stdout || "").trim() || undefined;
+  }
+
+  private readCurrentHash(project: Project, filePath: string) {
+    const target = resolveProjectFile(project, filePath);
+    if (!fs.existsSync(target)) {
+      return { existed: false, contentHash: sha256Text("") };
+    }
+    return {
+      existed: true,
+      contentHash: sha256Text(fs.readFileSync(target, "utf8"))
+    };
   }
 
   list(): WebPatch[] {
@@ -44,9 +66,10 @@ export class PatchEngine {
 
   create(project: Project, input: { taskId?: string; taskBranchId?: string; title: string; rationale?: string; changes: WebPatchChange[] }, requestId?: string): WebPatch {
     const changes = validatePatchChanges(project, input.changes);
+    const touchedFiles = changes.map((change) => normalizePathSlashes(change.filePath));
     const conflicts: TaskConflict[] = input.taskId
-      ? this.taskStore.detectConflicts(project.id, changes.map((change) => change.filePath), input.taskId)
-      : this.taskStore.detectConflicts(project.id, changes.map((change) => change.filePath));
+      ? this.taskStore.detectConflicts(project.id, touchedFiles, input.taskId)
+      : this.taskStore.detectConflicts(project.id, touchedFiles);
     const patch: WebPatch = {
       id: nanoid(10),
       projectId: project.id,
@@ -56,12 +79,19 @@ export class PatchEngine {
       rationale: input.rationale || "",
       status: "needs_approval",
       changes,
+      touchedFiles,
+      baseGitHead: this.readGitHead(project),
+      fileSnapshots: touchedFiles.map((filePath) => ({
+        filePath,
+        ...this.readCurrentHash(project, filePath)
+      })),
       conflicts,
       createdBy: "chatgpt-web",
       events: [{ at: now(), type: "patch_created", message: "Patch draft created. Files are unchanged until apply.", data: compactForLog(changes) }],
       createdAt: now(),
       updatedAt: now()
     };
+    patch.lastConflictStatus = this.getPatchConflictStatus(project, patch);
     this.stateStore.update((state) => {
       state.webPatches.push(patch);
     });
@@ -73,10 +103,10 @@ export class PatchEngine {
       requestId,
       projectId: project.id,
       taskId: input.taskId,
-      details: { patchId: patch.id, files: changes.map((change) => change.filePath), conflicts }
+      details: { patchId: patch.id, files: touchedFiles, conflicts, conflictStatus: patch.lastConflictStatus }
     });
     if (input.taskId) {
-      this.taskStore.linkArtifact(input.taskId, { id: patch.id, type: "patch", label: patch.title, filePaths: changes.map((change) => change.filePath) });
+      this.taskStore.linkArtifact(input.taskId, { id: patch.id, type: "patch", label: patch.title, filePaths: touchedFiles });
     }
     return patch;
   }
@@ -86,12 +116,65 @@ export class PatchEngine {
     return this.diffManager.diffPatch(patch, project);
   }
 
+  getPatchConflictStatus(project: Project, patchOrId: string | WebPatch): PatchConflictStatus {
+    const patch = typeof patchOrId === "string" ? this.get(patchOrId) : patchOrId;
+    const currentGitHead = this.readGitHead(project) || null;
+    const branchConflicts = this.taskBranchStore.detectConflicts({
+      projectId: project.id,
+      taskBranchId: patch.taskBranchId,
+      touchedFiles: patch.touchedFiles,
+      baseGitHead: patch.baseGitHead,
+      currentGitHead: currentGitHead || undefined
+    });
+    const changedFiles = patch.fileSnapshots
+      .filter((snapshot) => {
+        const current = this.readCurrentHash(project, snapshot.filePath);
+        return current.existed !== snapshot.existed || current.contentHash !== snapshot.contentHash;
+      })
+      .map((snapshot) => snapshot.filePath);
+    const stalePatch = Boolean(
+      changedFiles.length
+      || (patch.baseGitHead && currentGitHead && patch.baseGitHead !== currentGitHead)
+    );
+    const conflictDetected = stalePatch || branchConflicts.conflictingBranches.length > 0;
+    const suggestedAction: PatchConflictStatus["suggestedAction"] = [];
+    const blockingReasons: string[] = [];
+    if (changedFiles.length) {
+      blockingReasons.push(`Target files changed since the patch was drafted: ${changedFiles.join(", ")}`);
+      suggestedAction.push("inspect_conflict", "rebase_patch");
+    }
+    if (patch.baseGitHead && currentGitHead && patch.baseGitHead !== currentGitHead) {
+      blockingReasons.push("Patch baseGitHead is stale relative to the current git HEAD.");
+      suggestedAction.push("refresh_context", "rebase_patch");
+    }
+    if (branchConflicts.conflictingBranches.length) {
+      blockingReasons.push("Another active Task Branch touches overlapping files.");
+      suggestedAction.push("inspect_conflict", "archive_conflicting_branch", "continue_with_manual_approval");
+    }
+    if (!suggestedAction.length) {
+      suggestedAction.push("continue_with_manual_approval");
+    }
+    return {
+      conflictDetected,
+      stalePatch,
+      overlappingFiles: branchConflicts.overlappingFiles,
+      conflictingBranches: branchConflicts.conflictingBranches,
+      changedFiles,
+      baseGitHead: patch.baseGitHead || null,
+      currentGitHead,
+      suggestedAction: Array.from(new Set(suggestedAction)),
+      blockingReasons,
+      requiresApproval: conflictDetected
+    };
+  }
+
   apply(project: Project, patchId: string, source: "mcp" | "dashboard", requestId?: string) {
     const patch = this.get(patchId);
     if (patch.status !== "needs_approval") {
       throw new Error(`patch cannot be applied from status ${patch.status}`);
     }
     this.approvalEngine.assertMutationsAllowed("apply patch");
+    const conflictStatus = this.getPatchConflictStatus(project, patch);
     const backupDir = this.backupDir(project, patch.id);
     fs.mkdirSync(backupDir, { recursive: true });
     const applied: Array<{ filePath: string; backupPath?: string; mode: string }> = [];
@@ -113,19 +196,25 @@ export class PatchEngine {
       target.status = "applied";
       target.appliedAt = now();
       target.updatedAt = now();
-      target.events.push({ at: now(), type: "patch_applied", message: `Patch applied by ${source}.`, data: { applied } });
+      target.lastConflictStatus = conflictStatus;
+      target.events.push({
+        at: now(),
+        type: conflictStatus.conflictDetected ? "patch_applied_with_warning" : "patch_applied",
+        message: conflictStatus.conflictDetected ? `Patch applied by ${source} with warnings.` : `Patch applied by ${source}.`,
+        data: { applied, conflictStatus }
+      });
     });
     this.logStore.write({
-      level: "warn",
+      level: conflictStatus.conflictDetected ? "warn" : "info",
       source,
       action: "apply_patch",
-      message: "Patch applied to local files.",
+      message: conflictStatus.conflictDetected ? "Patch applied with stale/conflict warnings." : "Patch applied to local files.",
       requestId,
       projectId: project.id,
       taskId: patch.taskId,
-      details: { patchId: patch.id, applied }
+      details: { patchId: patch.id, applied, conflictStatus }
     });
-    return { applied };
+    return { applied, conflictStatus };
   }
 
   revert(project: Project, patchId: string, source: "mcp" | "dashboard", requestId?: string) {
@@ -191,8 +280,38 @@ export class PatchEngine {
       throw new Error(`patch cannot be applied from status ${patch.status}`);
     }
     const settings = this.approvalEngine.currentSettings();
+    const conflictStatus = this.getPatchConflictStatus(project, patch);
+    this.stateStore.update((state) => {
+      const current = state.webPatches.find((item) => item.id === patch.id);
+      if (current) {
+        current.lastConflictStatus = conflictStatus;
+        current.updatedAt = now();
+      }
+    });
     if (settings.permissionMode === "read_only") {
-      return { applied: false, status: "blocked", reason: "read_only mode blocks file writes", patch };
+      return { applied: false, status: "blocked", reason: "read_only mode blocks file writes", patch, conflictDetected: conflictStatus.conflictDetected, stalePatch: conflictStatus.stalePatch, requiresApproval: true };
+    }
+    if (settings.permissionMode === "auto_review" && conflictStatus.conflictDetected) {
+      this.logStore.write({
+        level: "warn",
+        source: "mcp",
+        action: "request_apply_patch",
+        message: "Patch auto-apply blocked by stale base or Task Branch conflict.",
+        requestId,
+        projectId: project.id,
+        taskId: patch.taskId,
+        details: { patchId: patch.id, conflictStatus }
+      });
+      return {
+        applied: false,
+        status: "needs_dashboard_approval",
+        reason: "Patch requires manual approval because it is stale or overlaps another active Task Branch.",
+        patch,
+        conflictStatus,
+        conflictDetected: true,
+        stalePatch: conflictStatus.stalePatch,
+        requiresApproval: true
+      };
     }
     if (!this.approvalEngine.canAutoApplyPatch(patch.changes)) {
       this.logStore.write({
@@ -203,12 +322,30 @@ export class PatchEngine {
         requestId,
         projectId: project.id,
         taskId: patch.taskId,
-        details: { patchId: patch.id }
+        details: { patchId: patch.id, conflictStatus }
       });
-      return { applied: false, status: "needs_dashboard_approval", reason: "Review and confirm the patch in Dashboard > Approvals or Tasks.", patch };
+      return {
+        applied: false,
+        status: "needs_dashboard_approval",
+        reason: "Review and confirm the patch in Dashboard > Approvals or Tasks.",
+        patch,
+        conflictStatus,
+        conflictDetected: conflictStatus.conflictDetected,
+        stalePatch: conflictStatus.stalePatch,
+        requiresApproval: true
+      };
     }
     const result = this.apply(project, patchId, "mcp", requestId);
-    return { applied: true, status: "applied", patch: this.get(patchId), result };
+    return {
+      applied: true,
+      status: "applied",
+      patch: this.get(patchId),
+      result,
+      conflictStatus,
+      conflictDetected: conflictStatus.conflictDetected,
+      stalePatch: conflictStatus.stalePatch,
+      requiresApproval: false
+    };
   }
 
   requestRevert(project: Project, patchId: string, requestId?: string) {

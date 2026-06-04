@@ -6,6 +6,7 @@ export const approvalPolicySchema = z.enum(["never", "onRequest", "unlessTrusted
 export const sandboxModeSchema = z.enum(["readOnly", "workspaceWrite", "dangerFullAccess"]);
 export const executorModeSchema = z.enum(["webagent", "codex", "hybrid", "external"]);
 export const executorPolicySchema = z.enum(["save_codex_quota", "best_result", "fast", "manual"]);
+export const contextPackBudgetSchema = z.enum(["small", "medium", "large"]);
 export const taskStateSchema = z.enum([
   "draft",
   "created",
@@ -43,6 +44,7 @@ export type ApprovalPolicy = z.infer<typeof approvalPolicySchema>;
 export type SandboxMode = z.infer<typeof sandboxModeSchema>;
 export type ExecutorMode = z.infer<typeof executorModeSchema>;
 export type ExecutorPolicy = z.infer<typeof executorPolicySchema>;
+export type ContextPackBudget = z.infer<typeof contextPackBudgetSchema>;
 export type TaskState = z.infer<typeof taskStateSchema>;
 export type JobStatus = z.infer<typeof jobStatusSchema>;
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
@@ -111,7 +113,10 @@ export type TaskArtifact = {
 };
 
 export type ContextPackSummary = {
+  budget: ContextPackBudget;
   files: number;
+  snippetFiles: number;
+  truncatedFiles: number;
   treeEntries: number;
   includesGitStatus: boolean;
   includesDiff: boolean;
@@ -201,6 +206,15 @@ export type RetrievedContextSnippet = {
   score: number;
 };
 
+export type RetrievedContextFileDetail = {
+  path: string;
+  reason: string;
+  summary: string;
+  snippets: string[];
+  exportedSymbols: string[];
+  suggestedNextRead: string;
+};
+
 export type RetrievedContextRecord = {
   id: string;
   projectId: string;
@@ -210,11 +224,14 @@ export type RetrievedContextRecord = {
   purpose?: string;
   conciseSummary: string;
   relevantFiles: string[];
+  relevantFileDetails: RetrievedContextFileDetail[];
   snippets: RetrievedContextSnippet[];
   rulesSummary: string[];
   matchedSkills: string[];
   suggestedNextReads: string[];
   estimatedTokenBudget: number;
+  retrievalWarnings: string[];
+  provider: "fts" | "fallback" | "hybrid";
   createdAt: string;
   updatedAt: string;
 };
@@ -226,7 +243,9 @@ export type ProjectIndexRecord = {
   lastIndexedAt?: string;
   staleFiles: string[];
   indexSize: number;
+  primaryProvider?: string;
   enabledProviders: string[];
+  version?: string;
   manifestPath?: string;
   sqlitePath?: string;
   summariesPath?: string;
@@ -240,6 +259,30 @@ export type WebPatchChange = {
   mode: "create" | "overwrite";
 };
 
+export type PatchFileSnapshot = {
+  filePath: string;
+  existed: boolean;
+  contentHash: string;
+};
+
+export type PatchConflictStatus = {
+  conflictDetected: boolean;
+  stalePatch: boolean;
+  overlappingFiles: string[];
+  conflictingBranches: Array<{
+    taskBranchId: string;
+    taskId: string;
+    branchName: string;
+    overlappingFiles: string[];
+  }>;
+  changedFiles: string[];
+  baseGitHead: string | null;
+  currentGitHead: string | null;
+  suggestedAction: Array<"refresh_context" | "rebase_patch" | "inspect_conflict" | "archive_conflicting_branch" | "continue_with_manual_approval">;
+  blockingReasons: string[];
+  requiresApproval: boolean;
+};
+
 export type WebPatch = {
   id: string;
   projectId: string;
@@ -249,7 +292,11 @@ export type WebPatch = {
   rationale: string;
   status: "draft" | "needs_approval" | "applied" | "rejected" | "reverted";
   changes: WebPatchChange[];
+  touchedFiles: string[];
+  baseGitHead?: string;
+  fileSnapshots: PatchFileSnapshot[];
   conflicts: TaskConflict[];
+  lastConflictStatus?: PatchConflictStatus;
   createdBy: "chatgpt-web" | "user" | "bridge";
   appliedAt?: string;
   rejectedAt?: string;

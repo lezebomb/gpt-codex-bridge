@@ -86,7 +86,7 @@ export function createMcpServer(service: BridgeService): McpServer {
   registerTool(server, service, "search_project", "Search the indexed project context and return concise matches plus snippets.", {
     projectId: z.string(),
     query: z.string(),
-    limit: z.number().int().min(1).max(8).default(5)
+    limit: z.number().int().min(1).max(12).default(5)
   }, (args) => service.searchProject(args));
   registerTool(server, service, "retrieve_context", "Retrieve a small, relevant context bundle for one query instead of dumping full files.", {
     projectId: z.string(),
@@ -94,8 +94,8 @@ export function createMcpServer(service: BridgeService): McpServer {
     taskBranchId: z.string().optional(),
     query: z.string(),
     purpose: z.string().optional(),
-    maxFiles: z.number().int().min(1).max(8).default(6),
-    maxSnippets: z.number().int().min(1).max(20).default(10),
+    maxFiles: z.number().int().min(1).max(12).default(6),
+    maxSnippets: z.number().int().min(1).max(24).default(10),
     includeRules: z.boolean().default(true),
     includeSkills: z.boolean().default(true)
   }, (args) => ({ retrievedContext: service.retrieveContext(args) }));
@@ -111,6 +111,7 @@ export function createMcpServer(service: BridgeService): McpServer {
     includeTree: z.boolean().default(true),
     includeGitStatus: z.boolean().default(true),
     includeDiff: z.boolean().default(false),
+    budget: z.enum(["small", "medium", "large"]).default("small"),
     explicitFullRead: z.boolean().default(false)
   }, (args) => service.createContextPack(args));
   registerTool(server, service, "create_task", "Create a task bound to one project, with executor routing, conflict detection, and optional context collection hints.", {
@@ -176,6 +177,9 @@ export function createMcpServer(service: BridgeService): McpServer {
     changes: z.array(z.object({ filePath: z.string(), mode: z.enum(["create", "overwrite"]).default("overwrite"), content: z.string() })).min(1)
   }, (args, requestId) => ({ patch: service.proposeWebPatch(args, requestId) }));
   registerTool(server, service, "get_patch_diff", "Return a readable diff for a patch draft.", { patchId: z.string() }, (args) => ({ diff: service.getPatchDiff(args.patchId) }));
+  registerTool(server, service, "get_patch_conflict_status", "Return stale-base and Task Branch conflict status for one patch before apply.", {
+    patchId: z.string()
+  }, (args) => ({ conflictStatus: service.getPatchConflictStatus(args.patchId) }));
   registerTool(server, service, "request_apply_patch", "Apply a patch if permission mode allows it, otherwise return a dashboard approval instruction.", { patchId: z.string() }, (args, requestId) => service.requestApplyPatch(args.patchId, requestId));
   registerTool(server, service, "request_revert_patch", "Revert an applied patch if permission mode allows it, otherwise return a dashboard approval instruction.", { patchId: z.string() }, (args, requestId) => service.requestRevertPatch(args.patchId, requestId));
   registerTool(server, service, "run_shell_command", "Create a shell command request with timeout, cwd, stdout/stderr capture, and dangerous-command blocking.", {

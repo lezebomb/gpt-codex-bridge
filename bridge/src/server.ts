@@ -7,7 +7,9 @@ import { z } from "zod";
 import { BridgeService } from "./bridge-service.js";
 import { DASHBOARD_DIR, HOST, PORT } from "./config.js";
 import { createMcpServer } from "./mcp-server.js";
+import { assertSupportedNodeVersion } from "./runtime/node-version.js";
 
+assertSupportedNodeVersion();
 const service = new BridgeService();
 const app = express();
 
@@ -292,7 +294,7 @@ app.post("/projects/:id/index/refresh", (req, res) => {
 });
 
 app.get("/projects/:id/search", (req, res) => {
-  const query = z.object({ query: z.string(), limit: z.coerce.number().int().min(1).max(8).default(5) }).parse(req.query || {});
+  const query = z.object({ query: z.string(), limit: z.coerce.number().int().min(1).max(12).default(5) }).parse(req.query || {});
   res.json(service.searchProject({ projectId: req.params.id, ...query }));
 });
 
@@ -302,8 +304,8 @@ app.post("/projects/:id/retrieve-context", (req, res) => {
     taskBranchId: z.string().optional(),
     query: z.string(),
     purpose: z.string().optional(),
-    maxFiles: z.number().int().min(1).max(8).default(6),
-    maxSnippets: z.number().int().min(1).max(20).default(10),
+    maxFiles: z.number().int().min(1).max(12).default(6),
+    maxSnippets: z.number().int().min(1).max(24).default(10),
     includeRules: z.boolean().default(true),
     includeSkills: z.boolean().default(true)
   }).parse(req.body || {});
@@ -319,6 +321,7 @@ app.post("/projects/:id/context-pack", async (req, res) => {
     includeTree: z.boolean().default(true),
     includeGitStatus: z.boolean().default(true),
     includeDiff: z.boolean().default(false),
+    budget: z.enum(["small", "medium", "large"]).default("small"),
     explicitFullRead: z.boolean().default(false)
   }).parse(req.body || {});
   res.status(201).json(await service.createContextPack({ ...body, projectId: req.params.id }));
@@ -457,6 +460,10 @@ app.post("/web-patches", (req, res) => {
 
 app.get("/web-patches/:id/diff", (req, res) => {
   res.json({ diff: service.getPatchDiff(req.params.id) });
+});
+
+app.get("/web-patches/:id/conflict-status", (req, res) => {
+  res.json({ conflictStatus: service.getPatchConflictStatus(req.params.id) });
 });
 
 app.post("/web-patches/:id/apply", (req, res) => {

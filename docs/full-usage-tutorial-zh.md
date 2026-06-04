@@ -3,7 +3,7 @@
 ## A. 本机第一次启动
 
 ```powershell
-cd C:\Users\24981\Desktop\gpt-codex-bridge\bridge
+cd .\bridge
 npm.cmd install --no-audit --no-fund --cache .\.npm-cache
 npm.cmd run dev
 ```

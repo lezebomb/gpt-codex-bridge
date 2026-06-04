@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 import { nanoid } from "nanoid";
 
@@ -74,4 +75,12 @@ export function truncateText(value: string, maxChars: number): string {
 
 export function summarizeText(value: string, maxChars: number): string {
   return truncateText(value.replace(/\s+/g, " ").trim(), maxChars);
+}
+
+export function sha256Text(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+export function normalizePathSlashes(value: string): string {
+  return String(value || "").replace(/\\/g, "/");
 }

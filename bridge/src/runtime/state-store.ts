@@ -1,5 +1,5 @@
 import { STATE_FILE } from "../config.js";
-import { now } from "../lib/common.js";
+import { normalizePathSlashes, now, sha256Text } from "../lib/common.js";
 import { readJsonFile, writeJsonFile } from "../lib/common.js";
 import { ApprovalRequest, BridgeState, BridgeSettings, ContextPackRecord, ExecutionJob, McpPluginRuntimeConfig, ProjectIndexRecord, RepairProposal, RetrievedContextRecord, ReviewSession, ShellCommandRecord, TaskBranchRecord, TaskRecord, WebPatch } from "../types.js";
 import { defaultSettings, normalizeSettings } from "./webagent/approval-engine.js";
@@ -102,6 +102,41 @@ function migrateTaskBranch(input: any): TaskBranchRecord {
   };
 }
 
+function migrateWebPatch(input: any): WebPatch {
+  const changes = Array.isArray(input.changes) ? input.changes : [];
+  const touchedFiles = Array.isArray(input.touchedFiles)
+    ? input.touchedFiles
+    : changes.map((change: any) => normalizePathSlashes(String(change.filePath || ""))).filter(Boolean);
+  const fileSnapshots = Array.isArray(input.fileSnapshots)
+    ? input.fileSnapshots
+    : changes.map((change: any) => ({
+        filePath: normalizePathSlashes(String(change.filePath || "")),
+        existed: true,
+        contentHash: sha256Text(String(change.content || ""))
+      }));
+  return {
+    id: String(input.id),
+    projectId: String(input.projectId),
+    taskId: typeof input.taskId === "string" ? input.taskId : undefined,
+    taskBranchId: typeof input.taskBranchId === "string" ? input.taskBranchId : undefined,
+    title: String(input.title || "Patch"),
+    rationale: String(input.rationale || ""),
+    status: input.status || "needs_approval",
+    changes,
+    touchedFiles,
+    baseGitHead: typeof input.baseGitHead === "string" ? input.baseGitHead : undefined,
+    fileSnapshots,
+    conflicts: Array.isArray(input.conflicts) ? input.conflicts : [],
+    lastConflictStatus: input.lastConflictStatus,
+    createdBy: input.createdBy || "chatgpt-web",
+    appliedAt: typeof input.appliedAt === "string" ? input.appliedAt : undefined,
+    rejectedAt: typeof input.rejectedAt === "string" ? input.rejectedAt : undefined,
+    events: Array.isArray(input.events) ? input.events : [],
+    createdAt: typeof input.createdAt === "string" ? input.createdAt : now(),
+    updatedAt: typeof input.updatedAt === "string" ? input.updatedAt : now()
+  };
+}
+
 export class StateStore {
   private defaultState(): BridgeState {
     return {
@@ -131,7 +166,7 @@ export class StateStore {
       tasks: Array.isArray((parsed as any).tasks) ? (parsed as any).tasks.map((item: any) => migrateTask(item)) : [],
       taskBranches: Array.isArray((parsed as any).taskBranches) ? (parsed as any).taskBranches.map((item: any) => migrateTaskBranch(item)) : [],
       executionJobs: executionJobs.length ? executionJobs : legacyJobs,
-      webPatches: Array.isArray((parsed as any).webPatches) ? ((parsed as any).webPatches as WebPatch[]) : [],
+      webPatches: Array.isArray((parsed as any).webPatches) ? ((parsed as any).webPatches as any[]).map((item) => migrateWebPatch(item)) : [],
       contextPacks: Array.isArray((parsed as any).contextPacks) ? ((parsed as any).contextPacks as ContextPackRecord[]) : [],
       retrievedContexts: Array.isArray((parsed as any).retrievedContexts) ? ((parsed as any).retrievedContexts as RetrievedContextRecord[]) : [],
       projectIndexes: Array.isArray((parsed as any).projectIndexes) ? ((parsed as any).projectIndexes as ProjectIndexRecord[]) : [],

@@ -31,7 +31,9 @@ export class ProjectIndexer {
         indexedFiles: 0,
         staleFiles: [],
         indexSize: 0,
+        primaryProvider: "fts5",
         enabledProviders: ["fts5", "summary-cache", "symbol:none", "vector:none"],
+        version: "context-index-v2",
         manifestPath: paths.manifestPath,
         sqlitePath: paths.sqlitePath,
         summariesPath: paths.summariesPath,
@@ -58,8 +60,9 @@ export class ProjectIndexer {
         continue;
       }
       const cachedRecord = cached.get(file.path);
-      if (!force && cachedRecord && cachedRecord.mtimeMs === file.mtimeMs) {
-        const content = fs.readFileSync(file.absolutePath, "utf8");
+      const content = fs.readFileSync(file.absolutePath, "utf8");
+      const contentHash = this.summaryCache.hash(content);
+      if (!force && cachedRecord && cachedRecord.mtimeMs === file.mtimeMs && cachedRecord.size === file.size && cachedRecord.hash === contentHash) {
         documents.push({
           path: file.path,
           summary: cachedRecord.summary,
@@ -70,7 +73,6 @@ export class ProjectIndexer {
         summaries.push(cachedRecord);
         continue;
       }
-      const content = fs.readFileSync(file.absolutePath, "utf8");
       const summary = summarizeText(content, 500) || summarizeText(file.path, 200);
       documents.push({
         path: file.path,
@@ -79,7 +81,7 @@ export class ProjectIndexer {
         size: file.size,
         mtimeMs: file.mtimeMs
       });
-      summaries.push({ path: file.path, summary, size: file.size, mtimeMs: file.mtimeMs });
+      summaries.push({ path: file.path, summary, size: file.size, mtimeMs: file.mtimeMs, hash: contentHash });
     }
 
     new FtsIndex(paths.sqlitePath).rebuild(documents);
@@ -92,7 +94,9 @@ export class ProjectIndexer {
       lastIndexedAt: now(),
       staleFiles: [],
       indexSize: stats?.size || 0,
+      primaryProvider: "fts5",
       enabledProviders: ["fts5", "summary-cache", "symbol:none", "vector:none"],
+      version: "context-index-v2",
       manifestPath: paths.manifestPath,
       sqlitePath: paths.sqlitePath,
       summariesPath: paths.summariesPath,

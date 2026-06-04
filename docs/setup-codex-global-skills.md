@@ -10,7 +10,7 @@ Codex can discover skills from multiple scopes:
 For personal default skills on Windows PowerShell:
 
 ```powershell
-$source = "C:\Users\24981\Desktop\gpt-codex-bridge\.agents\skills"
+$source = Join-Path (Get-Location) ".agents\\skills"
 $target = "$env:USERPROFILE\.agents\skills"
 New-Item -ItemType Directory -Force -Path $target | Out-Null
 Copy-Item -Path "$source\*" -Destination $target -Recurse -Force

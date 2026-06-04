@@ -21,14 +21,14 @@ const I18N = {
     brandSubtitle: "ChatGPT 网页端主控 GPT 的本地能力层",
     topTitle: "ChatGPT Web-first Bridge",
     topSubtitle: "主界面是 ChatGPT 网页端，本页是本地 Bridge 控制面板，负责连接、项目、审批、日志、MCP 插件和执行器。",
-    setup: "Setup",
+    setup: "设置向导 / Setup",
     project: "项目",
     tasks: "任务",
     approvals: "审批",
     logs: "日志",
-    mcp: "MCP Center",
-    executors: "Executors",
-    advanced: "Advanced",
+    mcp: "MCP 中心 / MCP Center",
+    executors: "执行器 / Executors",
+    advanced: "高级 / Advanced",
     refresh: "刷新",
     testConnection: "测试连接",
     chinese: "中文",
@@ -92,25 +92,25 @@ const I18N = {
     chinese: "中文",
     english: "English",
     copy: "Copy",
-    setupTitle: "Setup",
+    setupTitle: "设置向导 / Setup",
     setupSubtitle: "Start the local bridge first, then use the /mcp endpoint and pairing code in ChatGPT Custom MCP.",
     setupNotice: "First-screen note: the main workspace is ChatGPT Web. This page is the local bridge control panel, not the primary IDE.",
     projectTitle: "Project",
     projectSubtitle: "Pick a project through a file-manager style browser. The bridge only reads and writes inside registered project roots.",
-    tasksTitle: "Tasks",
+    tasksTitle: "任务 / Tasks",
     tasksSubtitle: "Create a task first, then choose WebAgent, Codex, Hybrid, or External. New conversations should resume with get_task instead of memory.",
-    approvalsTitle: "Approvals",
+    approvalsTitle: "审批 / Approvals",
     approvalsSubtitle: "Anything that needs a human decision appears here: patches, execution jobs, shell commands, and repair proposals.",
     logsTitle: "Logs",
     logsSubtitle: "Every REST, MCP, executor, and error event lands in the shared JSONL logs. When something fails, start with requestId.",
-    mcpTitle: "MCP Center",
+    mcpTitle: "MCP 中心 / MCP Center",
     mcpSubtitle: "The bridge is your MCP entry point and the manager for filesystem, Git, Codex, Playwright, and optional plugins.",
-    executorsTitle: "Executors",
+    executorsTitle: "执行器 / Executors",
     executorsSubtitle: "WebAgent saves Codex quota. Codex is for harder engineering tasks. Hybrid mixes both. External is a dry-run stub for third-party CLIs.",
-    advancedTitle: "Advanced",
+    advancedTitle: "高级 / Advanced",
     advancedSubtitle: "Switch execution mode, change permission mode, read diagnostics, and inspect the lower-level runtime controls.",
     noData: "No data yet.",
-    currentProject: "Current project",
+    currentProject: "当前项目",
     browseRoots: "Common roots",
     browseDirs: "Directories",
     open: "Open",
@@ -321,7 +321,7 @@ function pageSetup() {
         <p>${escapeHtml(state.config ? `Run mode: ${state.config.execution}; Permission mode: ${state.config.settings.permissionMode}` : "")}</p>
       </article>
       <article class="card">
-        <h3>Quick Status</h3>
+        <h3>快速状态 / Quick Status</h3>
         <dl class="kv">
           <dt>Dashboard</dt>
           <dd>${escapeHtml((serviceUrl() || "") + "/dashboard/")}</dd>
@@ -380,6 +380,15 @@ function formatDateTime(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
 }
 
+function formatConflictAction(action) {
+  if (action === "refresh_context") return "刷新上下文 / refresh_context";
+  if (action === "rebase_patch") return "重做 patch 基线 / rebase_patch";
+  if (action === "inspect_conflict") return "检查冲突 / inspect_conflict";
+  if (action === "archive_conflicting_branch") return "归档冲突分支 / archive_conflicting_branch";
+  if (action === "continue_with_manual_approval") return "人工审批后继续 / continue_with_manual_approval";
+  return action;
+}
+
 function getTaskBranches(taskId) {
   return state.taskBranches.filter((branch) => branch.taskId === taskId);
 }
@@ -391,7 +400,7 @@ function taskBranchOptions(taskId = "") {
 
 function renderTaskBranches(task) {
   const branches = getTaskBranches(task.id);
-  if (!branches.length) return `<div class="empty">No branches yet.</div>`;
+  if (!branches.length) return `<div class="empty">暂无任务分支。</div>`;
   return `<div class="items">${branches.map((branch) => `
     <div class="item">
       <header>
@@ -403,19 +412,34 @@ function renderTaskBranches(task) {
       </header>
       <div class="stack">
         <span class="tag">executor: ${escapeHtml(branch.executorMode)}</span>
-        <span class="tag">${branch.executorLocked ? "locked" : "switchable"}</span>
-        ${task.activeTaskBranchId === branch.id ? `<span class="tag">active branch</span>` : ""}
+        <span class="tag">${branch.executorLocked ? "已锁定" : "可切换"}</span>
+        ${task.activeTaskBranchId === branch.id ? `<span class="tag">当前活跃分支</span>` : ""}
         ${branch.touchedFiles.map((filePath) => `<span class="tag">${escapeHtml(filePath)}</span>`).join("")}
       </div>
       <p style="margin: 12px 0 0;">${escapeHtml(branch.executorDecisionReason || "")}</p>
       <div class="item-actions" style="margin-top: 12px;">
-        ${task.activeTaskBranchId === branch.id ? "" : `<button class="secondary-button" data-set-active-branch="${branch.id}" data-task-id="${task.id}">Set Active</button>`}
-        <button class="ghost-button" data-continue-branch="${branch.id}">Continue</button>
-        <button class="ghost-button" data-branch-conflicts="${branch.id}">Conflicts</button>
-        <button class="ghost-button" data-branch-detail="${branch.id}">Detail</button>
+        ${task.activeTaskBranchId === branch.id ? "" : `<button class="secondary-button" data-set-active-branch="${branch.id}" data-task-id="${task.id}">设为活跃分支</button>`}
+        <button class="ghost-button" data-continue-branch="${branch.id}">继续</button>
+        <button class="ghost-button" data-branch-conflicts="${branch.id}">查看冲突</button>
+        <button class="ghost-button" data-branch-detail="${branch.id}">详情</button>
       </div>
     </div>
   `).join("")}</div>`;
+}
+
+function renderPatchConflictStatus(conflictStatus) {
+  if (!conflictStatus) return "";
+  return `
+    <div class="stack" style="margin-top: 10px;">
+      ${conflictStatus.overlappingFiles?.map((filePath) => `<span class="tag">重叠文件: ${escapeHtml(filePath)}</span>`).join("") || ""}
+      ${conflictStatus.changedFiles?.map((filePath) => `<span class="tag">已变化文件: ${escapeHtml(filePath)}</span>`).join("") || ""}
+      ${conflictStatus.baseGitHead ? `<span class="tag">baseGitHead: ${escapeHtml(conflictStatus.baseGitHead.slice(0, 10))}</span>` : ""}
+      ${conflictStatus.currentGitHead ? `<span class="tag">currentGitHead: ${escapeHtml(conflictStatus.currentGitHead.slice(0, 10))}</span>` : ""}
+      ${conflictStatus.suggestedAction?.map((item) => `<span class="tag">建议: ${escapeHtml(formatConflictAction(item))}</span>`).join("") || ""}
+    </div>
+    ${conflictStatus.conflictingBranches?.length ? `<p style="margin: 10px 0 0;">冲突分支: ${escapeHtml(conflictStatus.conflictingBranches.map((item) => item.branchName).join(", "))}</p>` : ""}
+    ${conflictStatus.blockingReasons?.length ? `<p style="margin: 8px 0 0;">阻塞原因: ${escapeHtml(conflictStatus.blockingReasons.join(" | "))}</p>` : ""}
+  `;
 }
 
 function pageProject() {
@@ -461,25 +485,26 @@ function pageProject() {
         ` : `<div class="empty">${t("noData")}</div>`}
       </article>
       <article class="card">
-        <h3>Context Index</h3>
+        <h3>上下文索引 / Context Index</h3>
         ${state.projectId ? `
           <div class="stack" style="margin-bottom: 12px;">
-            <span class="tag">status: ${escapeHtml(index?.status || "missing")}</span>
-            <span class="tag">files: ${escapeHtml(index?.indexedFiles ?? 0)}</span>
-            <span class="tag">providers: ${escapeHtml((index?.enabledProviders || []).join(", ") || "none")}</span>
+            <span class="tag">状态: ${escapeHtml(index?.status || "missing")}</span>
+            <span class="tag">已索引文件: ${escapeHtml(index?.indexedFiles ?? 0)}</span>
+            <span class="tag">Provider: ${escapeHtml(index?.primaryProvider || "fts5")}</span>
+            <span class="tag">Providers: ${escapeHtml((index?.enabledProviders || []).join(", ") || "none")}</span>
           </div>
-          <p>Last indexed: ${escapeHtml(formatDateTime(index?.lastIndexedAt) || "not yet")}</p>
-          ${index?.staleFiles?.length ? `<p>Stale files: ${escapeHtml(index.staleFiles.slice(0, 6).join(", "))}</p>` : ""}
+          <p>上次索引: ${escapeHtml(formatDateTime(index?.lastIndexedAt) || "尚未建立")}</p>
+          ${index?.staleFiles?.length ? `<p>待刷新文件: ${escapeHtml(index.staleFiles.slice(0, 6).join(", "))}</p>` : ""}
           <div class="item-actions" style="margin-top: 12px;">
-            <button class="secondary-button" data-action="index-project">Index Project</button>
-            <button class="ghost-button" data-action="refresh-index">Refresh Index</button>
+            <button class="secondary-button" data-action="index-project">建立索引</button>
+            <button class="ghost-button" data-action="refresh-index">刷新索引</button>
           </div>
         ` : `<div class="empty">${t("noData")}</div>`}
       </article>
       <article class="card">
         <h3>${t("readFile")}</h3>
         <form id="readFileForm">
-          <label>Relative path<input name="path" placeholder="src/App.tsx" /></label>
+          <label>相对路径<input name="path" placeholder="src/App.tsx" /></label>
           <button class="primary-button" type="submit">${t("readFile")}</button>
         </form>
         <div style="margin-top: 14px;"><pre id="fileContentPre">${escapeHtml(state.fileContent || "")}</pre></div>
@@ -503,10 +528,10 @@ function pageTasks() {
       <article class="card">
         <h3>${t("createTask")}</h3>
         <form id="taskForm">
-          <label>Title<input name="taskTitle" placeholder="v2 MCP routing polish" /></label>
-          <label>Goal<textarea name="taskGoal" placeholder="Refactor the MCP task flow and keep the dashboard buildable."></textarea></label>
-          <label>Target files<input name="targetFiles" placeholder="src/server.ts, public/app.js" /></label>
-          <label>Executor mode
+          <label>任务标题<input name="taskTitle" placeholder="v2 MCP routing polish" /></label>
+          <label>任务目标<textarea name="taskGoal" placeholder="Refactor the MCP task flow and keep the dashboard buildable."></textarea></label>
+          <label>目标文件<input name="targetFiles" placeholder="src/server.ts, public/app.js" /></label>
+          <label>Executor 模式
             <select name="executorMode">
               <option value="">auto</option>
               <option value="webagent">webagent</option>
@@ -515,7 +540,7 @@ function pageTasks() {
               <option value="external">external</option>
             </select>
           </label>
-          <label>Executor policy
+          <label>Executor 策略
             <select name="executorPolicy">
               <option value="">save_codex_quota</option>
               <option value="save_codex_quota">save_codex_quota</option>
@@ -530,35 +555,35 @@ function pageTasks() {
       <article class="card">
         <h3>${t("createPatch")}</h3>
         <form id="patchForm">
-          <label>Task
+          <label>任务
             <select name="taskId">
-              <option value="">optional</option>
+              <option value="">可选</option>
               ${state.tasks.map((task) => `<option value="${task.id}">${escapeHtml(task.taskTitle)}</option>`).join("")}
             </select>
           </label>
-          <label>Task branch
+          <label>Task Branch
             <select name="taskBranchId">
-              <option value="">active branch</option>
+              <option value="">当前活跃分支</option>
               ${taskBranchOptions()}
             </select>
           </label>
-          <label>Title<input name="title" placeholder="Update README copy" /></label>
-          <label>File path<input name="filePath" placeholder="README.md" /></label>
-          <label>Mode
+          <label>标题<input name="title" placeholder="Update README copy" /></label>
+          <label>文件路径<input name="filePath" placeholder="README.md" /></label>
+          <label>模式
             <select name="mode">
               <option value="overwrite">overwrite</option>
               <option value="create">create</option>
             </select>
           </label>
-          <label>Rationale<textarea name="rationale" placeholder="Explain why this bounded patch is safe."></textarea></label>
-          <label>Content<textarea name="content" placeholder="Full file content"></textarea></label>
+          <label>说明<textarea name="rationale" placeholder="Explain why this bounded patch is safe."></textarea></label>
+          <label>内容<textarea name="content" placeholder="Full file content"></textarea></label>
           <button class="primary-button" type="submit">${t("createPatch")}</button>
         </form>
       </article>
     </div>
     <div class="grid two">
       <article class="card">
-        <h3>Tasks</h3>
+        <h3>任务列表 / Tasks</h3>
         <div class="items">
           ${state.tasks.length ? state.tasks.map((task) => `
             <div class="item">
@@ -572,7 +597,7 @@ function pageTasks() {
               <div class="stack">
                 <span class="tag">mode: ${escapeHtml(task.executorMode)}</span>
                 <span class="tag">policy: ${escapeHtml(task.executorPolicy)}</span>
-                <span class="tag">${task.executorLocked ? "executor locked" : "executor switchable"}</span>
+                <span class="tag">${task.executorLocked ? "Executor 已锁定" : "Executor 可切换"}</span>
                 ${task.activeTaskBranchId ? `<span class="tag">active: ${escapeHtml(getTaskBranches(task.id).find((branch) => branch.id === task.activeTaskBranchId)?.branchName || task.activeTaskBranchId)}</span>` : ""}
                 ${task.recommendedNextAction ? `<span class="tag">next: ${escapeHtml(task.recommendedNextAction)}</span>` : ""}
                 ${task.conflicts.map((conflict) => `<span class="tag">conflict: ${escapeHtml(conflict.filePath)}</span>`).join("")}
@@ -581,11 +606,11 @@ function pageTasks() {
               <div class="item-actions" style="margin-top: 12px;">
                 <button class="secondary-button" data-create-pack="${task.id}">${t("createPack")}</button>
                 <button class="primary-button" data-create-job="${task.id}">${t("createJob")}</button>
-                <button class="ghost-button" data-create-branch="${task.id}">New Branch</button>
-                <button class="ghost-button" data-task-detail="${task.id}">Detail</button>
+                <button class="ghost-button" data-create-branch="${task.id}">新建分支</button>
+                <button class="ghost-button" data-task-detail="${task.id}">详情</button>
               </div>
               <div style="margin-top: 12px;">
-                <h4>Branches</h4>
+                <h4>任务分支 / Task Branches</h4>
                 ${renderTaskBranches(task)}
               </div>
             </div>
@@ -593,7 +618,7 @@ function pageTasks() {
         </div>
       </article>
       <article class="card">
-        <h3>Execution Jobs</h3>
+        <h3>执行任务 / Execution Jobs</h3>
         <div class="items">
           ${state.executionJobs.length ? state.executionJobs.map((job) => `
             <div class="item">
@@ -611,8 +636,8 @@ function pageTasks() {
               </div>
               <div class="item-actions" style="margin-top: 12px;">
                 ${job.status === "needs_approval" ? `<button class="primary-button" data-approve-job="${job.id}">${t("approveRun")}</button>` : ""}
-                ${job.status === "queued" ? `<button class="secondary-button" data-run-job="${job.id}">Run</button>` : ""}
-                <button class="ghost-button" data-job-detail="${job.id}">Detail</button>
+                ${job.status === "queued" ? `<button class="secondary-button" data-run-job="${job.id}">运行</button>` : ""}
+                <button class="ghost-button" data-job-detail="${job.id}">详情</button>
               </div>
             </div>
           `).join("") : `<div class="empty">${t("noData")}</div>`}
@@ -621,7 +646,7 @@ function pageTasks() {
     </div>
     <div class="grid two">
       <article class="card">
-        <h3>Patches</h3>
+        <h3>补丁草稿 / Patches</h3>
         <div class="items">
           ${state.patches.length ? state.patches.map((patch) => `
             <div class="item">
@@ -633,15 +658,17 @@ function pageTasks() {
                 <span class="pill-status ${patch.status}">${escapeHtml(patch.status)}</span>
               </header>
               <div class="stack">${patch.changes.map((change) => `<span class="tag">${escapeHtml(change.filePath)}</span>`).join("")}</div>
+              ${renderPatchConflictStatus(patch.conflictStatus)}
               <div class="item-actions" style="margin-top: 12px;">
-                <button class="ghost-button" data-patch-diff="${patch.id}">Diff</button>
+                <button class="ghost-button" data-patch-diff="${patch.id}">查看 Diff</button>
+                <button class="ghost-button" data-patch-conflict="${patch.id}">冲突状态</button>
               </div>
             </div>
           `).join("") : `<div class="empty">${t("noData")}</div>`}
         </div>
       </article>
       <article class="card">
-        <h3>Selected Detail</h3>
+        <h3>详细信息 / Detail</h3>
         <pre id="taskDetailPre">${escapeHtml(state.taskDetail ? JSON.stringify(state.taskDetail, null, 2) : "")}</pre>
       </article>
     </div>
@@ -663,6 +690,7 @@ function pageApprovals() {
               </div>
               <span class="pill-status ${escapeHtml(item.status)}">${escapeHtml(item.status)}</span>
             </header>
+            ${item.conflictStatus ? renderPatchConflictStatus(item.conflictStatus) : ""}
             <div class="item-actions">${renderActions(item)}</div>
           </div>
         `).join("") : `<div class="empty">${t("noData")}</div>`}
@@ -681,17 +709,17 @@ function pageApprovals() {
       </div>
     </section>
     <div class="grid two">
-      ${renderApprovalBlock("Patch Apply", approvals.patches || [], (item) => `
+      ${renderApprovalBlock("补丁审批 / Patch Apply", approvals.patches || [], (item) => `
         <button class="primary-button" data-apply-patch="${item.id}">${t("apply")}</button>
         <button class="danger-button" data-reject-patch="${item.id}">${t("reject")}</button>
       `)}
-      ${renderApprovalBlock("Execution Jobs", approvals.executionJobs || [], (item) => `
+      ${renderApprovalBlock("执行任务 / Execution Jobs", approvals.executionJobs || [], (item) => `
         <button class="primary-button" data-approve-job="${item.id}">${t("approveRun")}</button>
       `)}
-      ${renderApprovalBlock("Shell Commands", approvals.shellCommands || [], (item) => `
+      ${renderApprovalBlock("Shell 命令 / Shell Commands", approvals.shellCommands || [], (item) => `
         <button class="primary-button" data-approve-command="${item.id}">${t("approveRun")}</button>
       `)}
-      ${renderApprovalBlock("Repairs", approvals.repairs || [], (item) => `
+      ${renderApprovalBlock("修复提案 / Repairs", approvals.repairs || [], (item) => `
         <button class="secondary-button" data-approve-repair="${item.id}">${t("save")}</button>
       `)}
     </div>
@@ -711,10 +739,10 @@ function pageLogs() {
     </section>
     <article class="card">
       <form id="logFilterForm" style="margin-bottom: 16px;">
-        <label>requestId<input name="requestId" value="${escapeHtml(state.logFilters.requestId || "")}" placeholder="Filter a failing requestId" /></label>
+        <label>requestId<input name="requestId" value="${escapeHtml(state.logFilters.requestId || "")}" placeholder="按 requestId 过滤失败请求" /></label>
         <div class="item-actions" style="margin-top: 12px;">
           <button class="secondary-button" type="submit">${t("loadLogs")}</button>
-          <button class="ghost-button" type="button" data-action="clear-log-filter">Clear</button>
+          <button class="ghost-button" type="button" data-action="clear-log-filter">清空</button>
         </div>
       </form>
       <div class="items">
@@ -737,16 +765,16 @@ function pageLogs() {
 
 function renderPluginActions(plugin) {
   if (plugin.status === "built-in") {
-    return `<button class="ghost-button" disabled>Always On</button>`;
+    return `<button class="ghost-button" disabled>始终启用</button>`;
   }
   if (plugin.status === "not_implemented") {
-    return `<button class="ghost-button" disabled>Planned</button>`;
+    return `<button class="ghost-button" disabled>规划中</button>`;
   }
   const pluginId = escapeHtml(plugin.id);
   const primary = plugin.enabled
-    ? `<button class="secondary-button" data-plugin-disable="${pluginId}">Disable</button>`
-    : `<button class="secondary-button" data-plugin-enable="${pluginId}">Enable</button>`;
-  return `${primary}<button class="ghost-button" data-plugin-configure="${pluginId}">Configure</button>`;
+    ? `<button class="secondary-button" data-plugin-disable="${pluginId}">停用</button>`
+    : `<button class="secondary-button" data-plugin-enable="${pluginId}">启用</button>`;
+  return `${primary}<button class="ghost-button" data-plugin-configure="${pluginId}">配置</button>`;
 }
 
 function pageMcp() {
@@ -764,7 +792,7 @@ function pageMcp() {
     </section>
     <div class="grid two">
       <article class="card">
-        <h3>Plugins</h3>
+        <h3>插件 / Plugins</h3>
         <div class="items">
           ${summary.plugins?.length ? summary.plugins.map((plugin) => `
             <div class="item">
@@ -792,7 +820,7 @@ function pageMcp() {
         </div>
       </article>
       <article class="card">
-        <h3>Tools</h3>
+        <h3>工具 / Tools</h3>
         <div class="items">
           ${tools.length ? tools.map((tool) => `
             <div class="item">
@@ -829,11 +857,11 @@ function pageExecutors() {
     </div>
     <div class="grid two" style="margin-top: 18px;">
       <article class="card">
-        <h3>Policies</h3>
+        <h3>策略 / Policies</h3>
         <div class="items">${(executors.policies || []).map((policy) => `<div class="item"><h4>${escapeHtml(policy.id)}</h4><p>${escapeHtml(policy.summary)}</p></div>`).join("")}</div>
       </article>
       <article class="card">
-        <h3>External Executors</h3>
+        <h3>外部执行器 / External Executors</h3>
         <p>${escapeHtml(executors.configPath || "")}</p>
         <div class="items">${(executors.externalExecutors || []).map((item) => `<div class="item"><h4>${escapeHtml(item.name)}</h4><p>${escapeHtml(item.command)} ${escapeHtml(item.args.join(" "))}</p><div class="stack"><span class="tag">enabled: ${item.enabled}</span><span class="tag">risk: ${escapeHtml(item.riskLevel)}</span></div></div>`).join("")}</div>
       </article>
@@ -854,9 +882,9 @@ function pageAdvanced() {
     </section>
     <div class="grid two">
       <article class="card">
-        <h3>Runtime</h3>
+        <h3>运行时 / Runtime</h3>
         <form id="runtimeForm">
-          <label>Execution mode
+          <label>执行模式 / Execution mode
             <select name="execution">
               ${["dry-run", "cli", "app-server"].map((mode) => `<option value="${mode}" ${state.config?.execution === mode ? "selected" : ""}>${mode}</option>`).join("")}
             </select>
@@ -865,9 +893,9 @@ function pageAdvanced() {
         </form>
       </article>
       <article class="card">
-        <h3>Permission Mode</h3>
+        <h3>权限模式 / Permission Mode</h3>
         <form id="permissionForm">
-          <label>Mode
+          <label>模式 / Mode
             <select name="permissionMode">
               ${["read_only", "manual_review", "auto_review", "full_access"].map((mode) => `<option value="${mode}" ${state.config?.settings?.permissionMode === mode ? "selected" : ""}>${mode}</option>`).join("")}
             </select>
@@ -878,7 +906,7 @@ function pageAdvanced() {
       </article>
     </div>
     <article class="card" style="margin-top: 18px;">
-      <h3>Support Bundle</h3>
+      <h3>诊断包 / Support Bundle</h3>
       <pre>${escapeHtml(state.diagnostics ? JSON.stringify(state.diagnostics, null, 2) : "")}</pre>
     </article>
   `;
@@ -1016,7 +1044,7 @@ function bindView() {
     try {
       await api(`/projects/${state.projectId}/index`, { method: "POST", body: { force: false } });
       await loadProjectIndexStatus(state.projectId);
-      setAlert("success", "Project indexed");
+      setAlert("success", "项目索引已建立");
     } catch (error) {
       handleError(error);
     }
@@ -1025,7 +1053,7 @@ function bindView() {
     try {
       await api(`/projects/${state.projectId}/index/refresh`, { method: "POST", body: {} });
       await loadProjectIndexStatus(state.projectId);
-      setAlert("success", "Index refreshed");
+      setAlert("success", "索引已刷新");
     } catch (error) {
       handleError(error);
     }
@@ -1122,11 +1150,11 @@ function bindView() {
     button.addEventListener("click", async () => {
       try {
         const taskId = button.getAttribute("data-create-branch");
-        const branchName = window.prompt("Branch name", "alt-approach");
+        const branchName = window.prompt("请输入 Task Branch 名称", "alt-approach");
         if (!branchName) return;
         await api(`/tasks/${taskId}/branches`, { method: "POST", body: { branchName } });
         await Promise.all([loadTasks(), loadTaskBranches()]);
-        setAlert("success", "Task branch created");
+        setAlert("success", "任务分支已创建");
       } catch (error) {
         handleError(error);
       }
@@ -1141,7 +1169,7 @@ function bindView() {
           body: { taskBranchId: button.getAttribute("data-set-active-branch") }
         });
         await Promise.all([loadTasks(), loadTaskBranches()]);
-        setAlert("success", "Active branch updated");
+        setAlert("success", "活跃分支已更新");
       } catch (error) {
         handleError(error);
       }
@@ -1239,6 +1267,17 @@ function bindView() {
     });
   });
 
+  document.querySelectorAll("[data-patch-conflict]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        state.taskDetail = await api(`/web-patches/${button.getAttribute("data-patch-conflict")}/conflict-status`);
+        render();
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  });
+
   document.querySelectorAll("[data-apply-patch]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
@@ -1292,7 +1331,7 @@ function bindView() {
       try {
         await api(`/mcp-center/plugins/${button.getAttribute("data-plugin-enable")}/enable`, { method: "POST", body: {} });
         await refreshCore();
-        setAlert("success", "Plugin enabled");
+        setAlert("success", "插件已启用");
       } catch (error) {
         handleError(error);
       }
@@ -1304,7 +1343,7 @@ function bindView() {
       try {
         await api(`/mcp-center/plugins/${button.getAttribute("data-plugin-disable")}/disable`, { method: "POST", body: {} });
         await refreshCore();
-        setAlert("success", "Plugin disabled");
+        setAlert("success", "插件已停用");
       } catch (error) {
         handleError(error);
       }
@@ -1314,12 +1353,12 @@ function bindView() {
   document.querySelectorAll("[data-plugin-configure]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
-        const raw = window.prompt("Plugin JSON config. Use env:NAME for secrets.", "{}");
+        const raw = window.prompt("请输入插件 JSON 配置。敏感值可写为 env:NAME。", "{}");
         if (raw === null) return;
         const config = raw.trim() ? JSON.parse(raw) : {};
         await api(`/mcp-center/plugins/${button.getAttribute("data-plugin-configure")}/configure`, { method: "POST", body: { config } });
         await refreshCore();
-        setAlert("success", "Plugin configured");
+        setAlert("success", "插件配置已保存");
       } catch (error) {
         handleError(error);
       }

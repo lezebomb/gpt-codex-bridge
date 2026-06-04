@@ -12,7 +12,7 @@
 ## 最短启动路径
 
 ```powershell
-cd C:\Users\24981\Desktop\gpt-codex-bridge
+cd <repo-root>
 npm.cmd install --no-audit --no-fund
 npm.cmd run dev
 ```

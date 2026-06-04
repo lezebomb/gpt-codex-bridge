@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { ensureDir, summarizeText } from "../../lib/common.js";
+import { ensureDir, sha256Text, summarizeText } from "../../lib/common.js";
 
 export type SummaryRecord = {
   path: string;
   summary: string;
   size: number;
   mtimeMs: number;
+  hash?: string;
 };
 
 export class SummaryCache {
@@ -33,5 +34,9 @@ export class SummaryCache {
 
   summarize(content: string): string {
     return summarizeText(content, 500);
+  }
+
+  hash(content: string): string {
+    return sha256Text(content);
   }
 }

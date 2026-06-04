@@ -93,7 +93,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\repair-install.ps1 -R
 等价的手动修复命令是：
 
 ```powershell
-cd C:\Users\24981\Desktop\gpt-codex-bridge\bridge
+cd .\bridge
 npm.cmd cache clean --force --cache .\.npm-cache
 Remove-Item -Recurse -Force .\node_modules -ErrorAction SilentlyContinue
 Remove-Item -Force .\package-lock.json -ErrorAction SilentlyContinue

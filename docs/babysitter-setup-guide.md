@@ -5,7 +5,7 @@
 ## 1. 打开 PowerShell
 
 ```powershell
-cd C:\Users\24981\Desktop\gpt-codex-bridge
+cd <repo-root>
 ```
 
 ## 2. 安装依赖
@@ -42,7 +42,7 @@ http://localhost:8787/dashboard/
 
 ```text
 项目名称: demo-project
-本地路径: C:\Users\24981\Desktop\gpt-codex-bridge\examples\demo-project
+本地路径示例: .\examples\demo-project
 ```
 
 点击“注册项目”。

@@ -5,7 +5,7 @@
 ## 1. 启动本地 Bridge
 
 ```powershell
-cd C:\Users\24981\Desktop\gpt-codex-bridge\bridge
+cd .\bridge
 npm.cmd install --no-audit --no-fund
 npm.cmd run dev
 ```

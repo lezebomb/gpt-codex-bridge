@@ -3,10 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "tsx src/server.ts",
     "start": "node dist/server.js",
     "build": "tsc",
+    "check": "node --check public/app.js",
     "check:public": "node --check public/app.js",
     "smoke": "node scripts/smoke-test.mjs",
     "mcp:smoke": "node scripts/mcp-smoke-test.mjs",
@@ -14,6 +18,11 @@
     "test:context-index": "node scripts/context-index-smoke-test.mjs",
     "test:executor-router": "node scripts/executor-router-test.mjs",
     "test:webagent-continue": "node scripts/webagent-continue-task-test.mjs",
+    "test:node-version": "node scripts/node-version-smoke-test.mjs",
+    "test:fts-queries": "node scripts/fts-safe-query-test.mjs",
+    "test:patch-conflicts": "node scripts/patch-conflict-test.mjs",
+    "test:context-budget": "node scripts/context-budget-test.mjs",
+    "test:docs": "node scripts/docs-link-check.mjs",
     "ui:smoke": "playwright test --config=playwright.config.mjs"
   },
   "dependencies": {

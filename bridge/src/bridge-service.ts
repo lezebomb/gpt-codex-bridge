@@ -4,10 +4,10 @@ import { spawnSync } from "node:child_process";
 
 import { nanoid } from "nanoid";
 
-import { CONTEXT_PACKS_DIR, EXTERNAL_EXECUTOR_CONFIG_FILE, HOST, MCP_PLUGINS, PORT, ROLE_DIR, VERSION } from "./config.js";
+import { CONTEXT_PACKS_DIR, EXTERNAL_EXECUTOR_CONFIG_FILE, HOST, MCP_PLUGINS, MIN_NODE_MAJOR, PORT, ROLE_DIR, VERSION } from "./config.js";
 import { compactForLog, ensureDir, filePreview, now } from "./lib/common.js";
 import { assertSafeRelativePath, findReadmePreview, inferTechStack, listBrowsableDirectories, listFilesystemRoots, readProjectFile, safeProjectPath } from "./project-files.js";
-import { ApprovalRequest, BridgeState, ContextPackRecord, ExecutionJob, ExecutorMode, ExecutorPacket, ExecutorPolicy, ExternalExecutorConfig, McpPluginRuntimeConfig, Project, ProjectIndexRecord, RepairProposal, RetrievedContextRecord, ReviewSession, TaskBranchRecord, TaskRecord, UiScreenshotRequest, WebPatch } from "./types.js";
+import { ApprovalRequest, BridgeState, ContextPackBudget, ContextPackRecord, ExecutionJob, ExecutorMode, ExecutorPacket, ExecutorPolicy, ExternalExecutorConfig, McpPluginRuntimeConfig, Project, ProjectIndexRecord, RepairProposal, RetrievedContextRecord, ReviewSession, TaskBranchRecord, TaskRecord, UiScreenshotRequest, WebPatch } from "./types.js";
 import { ExecutorRouter } from "./executors/router.js";
 import { WebAgentExecutor } from "./executors/webagent-executor.js";
 import { HybridExecutor } from "./executors/hybrid-executor.js";
@@ -42,7 +42,7 @@ export class BridgeService {
   readonly contextCollector = new ContextCollector(this.diffManager, this.instructionLoader, this.skillLoader);
   readonly projectIndexer = new ProjectIndexer();
   readonly contextRetriever = new ContextRetriever(this.projectIndexer, this.instructionLoader, this.skillLoader);
-  readonly patchEngine = new PatchEngine(this.stateStore, this.taskStore, this.approvalEngine, this.diffManager, this.logStore);
+  readonly patchEngine = new PatchEngine(this.stateStore, this.taskStore, this.taskBranchStore, this.approvalEngine, this.diffManager, this.logStore);
   readonly shellRunner = new ShellRunner(this.stateStore, this.approvalEngine, this.logStore);
   readonly uiScreenshotRunner = new UiScreenshotRunner(this.logStore);
   readonly router = new ExecutorRouter();
@@ -84,7 +84,9 @@ export class BridgeService {
       cloudflareTunnelExample: "https://bridge.your-domain.com/mcp",
       authModeRecommendation: "Local pairing code",
       pairingCodeLabel: "Local pairing code",
+      nodeVersionRequirement: `Node >= ${MIN_NODE_MAJOR}`,
       windowsPowerShellQuickStart: [
+        "node -v",
         "cd .\\bridge",
         "npm.cmd install --no-audit --no-fund",
         "npm.cmd run dev",
@@ -214,6 +216,7 @@ export class BridgeService {
       ["detect_branch_conflicts", "Detect overlapping touched files and stale git-head conflicts across active branches."],
       ["propose_web_patch", "Create a bounded patch draft without writing files immediately."],
       ["get_patch_diff", "Read a patch diff."],
+      ["get_patch_conflict_status", "Read stale-base and Task Branch conflict status for one patch."],
       ["request_apply_patch", "Apply a patch when permission mode allows it, or defer to dashboard approval."],
       ["request_revert_patch", "Revert a patch when permission mode allows it, or defer to dashboard approval."],
       ["run_shell_command", "Create a shell command request with timeout, cwd, and approval handling."],
@@ -311,6 +314,23 @@ export class BridgeService {
     return String(result.stdout || "").trim() || undefined;
   }
 
+  private contextBudgetConfig(budget: ContextPackBudget) {
+    if (budget === "large") {
+      return { maxFiles: 12, maxSnippets: 12 };
+    }
+    if (budget === "medium") {
+      return { maxFiles: 8, maxSnippets: 8 };
+    }
+    return { maxFiles: 5, maxSnippets: 5 };
+  }
+
+  private enrichPatch(project: Project, patch: WebPatch) {
+    return {
+      ...patch,
+      conflictStatus: this.patchEngine.getPatchConflictStatus(project, patch.id)
+    };
+  }
+
   private deriveTaskState(task: TaskRecord, branch: TaskBranchRecord | undefined): TaskRecord["status"] {
     if (["completed", "failed", "cancelled", "blocked"].includes(task.status)) {
       return task.status;
@@ -387,9 +407,20 @@ export class BridgeService {
     };
   }
 
-  async createContextPack(input: { projectId: string; taskId?: string; taskBranchId?: string; goal?: string; paths?: string[]; includeTree?: boolean; includeGitStatus?: boolean; includeDiff?: boolean; explicitFullRead?: boolean }) {
+  async createContextPack(input: { projectId: string; taskId?: string; taskBranchId?: string; goal?: string; paths?: string[]; includeTree?: boolean; includeGitStatus?: boolean; includeDiff?: boolean; explicitFullRead?: boolean; budget?: ContextPackBudget }) {
     const project = this.getProject(input.projectId);
-    const { record, markdown } = await this.contextCollector.createContextPack(project, input);
+    const budget = input.budget || "small";
+    const retrievalQuery = input.goal || input.paths?.join(" ") || "project context";
+    const retrievedContext = input.explicitFullRead
+      ? null
+      : this.contextRetriever.retrieve(project, {
+          query: retrievalQuery,
+          purpose: input.goal || "Create a bounded context pack",
+          includeRules: true,
+          includeSkills: true,
+          ...this.contextBudgetConfig(budget)
+        });
+    const { record, markdown } = await this.contextCollector.createContextPack(project, { ...input, budget, retrievedContext });
     this.stateStore.update((state) => {
       state.contextPacks.push(record);
     });
@@ -447,6 +478,8 @@ export class BridgeService {
     const results = this.contextRetriever.retrieve(project, { query: input.query, maxFiles: input.limit, maxSnippets: input.limit, includeRules: false, includeSkills: false });
     return {
       query: input.query,
+      provider: results.provider,
+      warning: results.retrievalWarnings[0],
       results: results.snippets.map((snippet) => ({
         path: snippet.filePath,
         score: snippet.score,
@@ -574,7 +607,7 @@ export class BridgeService {
       taskBranches: state.taskBranches.filter((branch) => branch.taskId === task.id),
       contextPacks: state.contextPacks.filter((pack) => task.contextPackIds.includes(pack.id)),
       retrievedContexts: state.retrievedContexts.filter((item) => task.retrievedContextIds.includes(item.id)),
-      patches: state.webPatches.filter((patch) => task.patchIds.includes(patch.id)),
+      patches: state.webPatches.filter((patch) => task.patchIds.includes(patch.id)).map((patch) => this.enrichPatch(this.getProject(patch.projectId), patch)),
       executionJobs: state.executionJobs.filter((job) => task.executionJobIds.includes(job.id)),
       shellCommands: state.shellCommands.filter((cmd) => task.shellCommandIds.includes(cmd.id))
     };
@@ -677,7 +710,7 @@ export class BridgeService {
       task: this.taskStore.get(branch.taskId),
       contextPacks: state.contextPacks.filter((pack) => branch.contextPackIds.includes(pack.id)),
       retrievedContexts: state.retrievedContexts.filter((item) => branch.retrievedContextIds.includes(item.id)),
-      patches: state.webPatches.filter((patch) => branch.patchIds.includes(patch.id))
+      patches: state.webPatches.filter((patch) => branch.patchIds.includes(patch.id)).map((patch) => this.enrichPatch(this.getProject(patch.projectId), patch))
     };
   }
 
@@ -737,6 +770,12 @@ export class BridgeService {
     const patch = this.patchEngine.get(patchId);
     const project = this.getProject(patch.projectId);
     return this.patchEngine.diff(project, patchId);
+  }
+
+  getPatchConflictStatus(patchId: string) {
+    const patch = this.patchEngine.get(patchId);
+    const project = this.getProject(patch.projectId);
+    return this.patchEngine.getPatchConflictStatus(project, patchId);
   }
 
   requestApplyPatch(patchId: string, requestId?: string) {
@@ -1075,12 +1114,14 @@ export class BridgeService {
       executionJobs: state.executionJobs.filter((job) => job.status === "needs_approval"),
       shellCommands: state.shellCommands.filter((command) => command.status === "needs_approval"),
       repairs: state.repairProposals.filter((repair) => repair.status === "needs_approval"),
-      patches: state.webPatches.filter((patch) => patch.status === "needs_approval")
+      patches: state.webPatches
+        .filter((patch) => patch.status === "needs_approval")
+        .map((patch) => this.enrichPatch(this.getProject(patch.projectId), patch))
     };
   }
 
   listPatches() {
-    return this.patchEngine.list();
+    return this.patchEngine.list().map((patch) => this.enrichPatch(this.getProject(patch.projectId), patch));
   }
 
   listReviews() {
