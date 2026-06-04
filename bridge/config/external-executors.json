@@ -1,0 +1,32 @@
+[
+  {
+    "id": "claude-code-cli",
+    "name": "Claude Code-compatible CLI",
+    "command": "claude-code",
+    "args": ["--json"],
+    "cwdMode": "project",
+    "env": {},
+    "enabled": false,
+    "riskLevel": "high"
+  },
+  {
+    "id": "deepseek-coder-cli",
+    "name": "DeepSeek Coder CLI",
+    "command": "deepseek-coder",
+    "args": ["--json"],
+    "cwdMode": "project",
+    "env": {},
+    "enabled": false,
+    "riskLevel": "high"
+  },
+  {
+    "id": "openrouter-agent",
+    "name": "OpenRouter Agent",
+    "command": "openrouter-agent",
+    "args": ["--json"],
+    "cwdMode": "project",
+    "env": {},
+    "enabled": false,
+    "riskLevel": "high"
+  }
+]

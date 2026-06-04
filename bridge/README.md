@@ -1,9 +1,11 @@
-# Bridge 后端
+# Bridge Runtime
 
-在此目录运行后端：
+`bridge/` 是本地服务端和本地控制面板。
+
+## 启动
 
 ```powershell
-npm.cmd install --no-audit --no-fund --cache .\.npm-cache
+npm.cmd install --no-audit --no-fund
 npm.cmd run dev
 ```
 
@@ -14,20 +16,33 @@ http://localhost:8787/dashboard/
 http://localhost:8787/mcp
 ```
 
-本地配对码自动生成在：
+本地配对码保存在：
 
 ```text
-data\runtime.json
+bridge/data/runtime.json
 ```
 
-常用检查：
+## 主要目录
+
+```text
+bridge/src/
+  bridge-service.ts
+  mcp-server.ts
+  server.ts
+  runtime/webagent/
+  executors/
+bridge/public/
+bridge/scripts/
+bridge/config/external-executors.json
+```
+
+## 常用检查
 
 ```powershell
 npm.cmd run build
-npm.cmd run check:public
+node --check public/app.js
 npm.cmd run smoke
 npm.cmd run mcp:smoke
-npm.cmd run ui:smoke
 ```
 
-`ui:smoke` 会启动 Chromium，如遇到系统权限限制，请在允许 GUI 启动的本机终端中运行。
+`ui:smoke` 需要本机能启动浏览器。

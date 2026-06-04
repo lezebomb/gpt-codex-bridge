@@ -27,6 +27,6 @@ gh auth status
 
 ## 安全建议
 
-- 真实仓库默认使用 `manual_review`。
+- 真实仓库建议切换到 `manual_review`；新状态默认是 `auto_review`。
 - 不要在 `main` 上开启 `full_access`。
 - 合并前让 ChatGPT 主控 GPT 与 Codex 做有限轮次审查。

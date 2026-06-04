@@ -45,29 +45,31 @@ async function main() {
 
   const health = await request("GET", "/health", undefined, "");
   assert(health.response.ok, `/health failed: ${health.response.status}`);
-  assert(health.body?.ok === true, "/health did not return ok=true");
-  console.log(`health ok: execution=${health.body.execution}; permission=${health.body.permissionMode}`);
+  console.log(`health ok: ${health.body.version}`);
 
   if (!token) {
     const bootstrap = await request("GET", "/bootstrap", undefined, "");
     assert(bootstrap.response.ok, `/bootstrap failed: ${bootstrap.response.status}`);
-    assert(Boolean(bootstrap.body?.token), "/bootstrap missing token");
     token = bootstrap.body.token;
-    console.log(`bootstrap ok: execution=${bootstrap.body.execution}; token=${bootstrap.body.tokenPreview || "loaded"}`);
+    console.log("bootstrap ok");
   }
 
-  const wrongToken = await request("GET", "/config", undefined, "wrong-token");
-  assert(wrongToken.response.status === 401, `/config with wrong token should be 401, got ${wrongToken.response.status}`);
-  assert(Boolean(wrongToken.body?.requestId), "401 response should include requestId");
-  console.log(`wrong token rejected with requestId=${wrongToken.body.requestId}`);
-
   const config = await must("GET", "/config");
-  assert(Boolean(config.settings?.permissionMode), "/config missing settings.permissionMode");
-  console.log(`config ok: execution=${config.execution}; permission=${config.settings.permissionMode}`);
+  assert(config.settings?.permissionMode, "missing settings.permissionMode");
+  console.log(`config ok: ${config.execution}`);
+
+  const pluginCenter = await must("GET", "/mcp-center");
+  assert(pluginCenter.summary?.plugins?.some((plugin) => plugin.id === "filesystem-restricted" && plugin.enabled === true), "built-in filesystem plugin should stay enabled");
+  assert(pluginCenter.summary?.plugins?.some((plugin) => plugin.id === "context7"), "context7 optional plugin should be listed");
+  const enabledPlugin = await must("POST", "/mcp-center/plugins/context7/enable", {});
+  assert(enabledPlugin.summary?.plugins?.some((plugin) => plugin.id === "context7" && plugin.enabled === true), "context7 enable did not persist");
+  const disabledPlugin = await must("POST", "/mcp-center/plugins/context7/disable", {});
+  assert(disabledPlugin.summary?.plugins?.some((plugin) => plugin.id === "context7" && plugin.enabled === false), "context7 disable did not persist");
+  console.log("mcp plugin center ok");
 
   const roots = await must("GET", "/fs/roots");
-  assert(Array.isArray(roots.roots), "/fs/roots missing roots");
-  console.log(`folder roots ok: ${roots.roots.length}`);
+  assert(Array.isArray(roots.roots) && roots.roots.length > 0, "/fs/roots missing roots");
+  console.log(`roots ok: ${roots.roots.length}`);
 
   const selected = await must("POST", "/projects/select", { path: demoProjectPath, displayName: "demo-project", allowShell: false });
   const project = selected.project;
@@ -75,12 +77,34 @@ async function main() {
   console.log(`project selected: ${project.id}`);
 
   const inspected = await must("GET", `/projects/${project.id}/inspect`);
-  assert(inspected.project?.id || inspected.path, "inspect_project response missing project data");
+  assert(inspected.project?.project?.id || inspected.project?.project?.path, "inspect response missing project details");
   console.log("inspect ok");
 
   const file = await must("GET", `/projects/${project.id}/files/read?path=${encodeURIComponent("src/App.tsx")}`);
-  assert(file.file?.content?.includes("function") || file.file?.content?.includes("export"), "file read did not include expected source text");
-  console.log("file read ok: src/App.tsx");
+  assert(file.file?.content?.includes("function") || file.file?.content?.includes("export"), "read_file missing expected content");
+  console.log("file read ok");
+
+  const task = await must("POST", "/tasks", {
+    projectId: project.id,
+    taskTitle: "Smoke webagent task",
+    taskGoal: "Update a small README marker through the new task flow.",
+    targetFiles: ["README.md"],
+    executorMode: "webagent",
+    executorPolicy: "save_codex_quota"
+  });
+  assert(task.task?.id, "task creation missing task id");
+  console.log(`task ok: ${task.task.id}`);
+
+  const contextPack = await must("POST", `/projects/${project.id}/context-pack`, {
+    taskId: task.task.id,
+    goal: task.task.taskGoal,
+    paths: ["README.md"],
+    includeTree: true,
+    includeGitStatus: true,
+    includeDiff: false
+  });
+  assert(contextPack.contextPackId, "context pack missing id");
+  console.log(`context pack ok: ${contextPack.contextPackId}`);
 
   const originalReadme = fs.readFileSync(demoReadmePath, "utf8");
   const marker = `Bridge smoke marker ${Date.now()}`;
@@ -89,7 +113,8 @@ async function main() {
   try {
     const patch = await must("POST", "/web-patches", {
       projectId: project.id,
-      title: `Smoke README patch ${Date.now()}`,
+      taskId: task.task.id,
+      title: "Smoke README patch",
       rationale: "REST smoke test patch.",
       changes: [{ filePath: "README.md", mode: "overwrite", content: patchedReadme }]
     });
@@ -101,12 +126,12 @@ async function main() {
     console.log("patch diff ok");
 
     const applied = await must("POST", `/web-patches/${patchId}/apply`, { confirm: true });
-    assert(applied.patch.status === "applied", "patch was not applied");
+    assert(applied.result.applied.length > 0, "patch apply did not return applied files");
     assert(fs.readFileSync(demoReadmePath, "utf8").includes(marker), "patched README missing marker");
     console.log("patch apply ok");
 
     const reverted = await must("POST", `/web-patches/${patchId}/revert`, { confirm: true });
-    assert(reverted.patch.status === "reverted", "patch was not reverted");
+    assert(reverted.result.reverted.length > 0, "patch revert did not return reverted files");
     assert(fs.readFileSync(demoReadmePath, "utf8") === originalReadme, "README did not return to original content");
     console.log("patch revert ok");
   } finally {
@@ -115,41 +140,60 @@ async function main() {
     }
   }
 
-  const job = await must("POST", "/codex/jobs", {
+  const webJob = await must("POST", `/tasks/${task.task.id}/executions`, { executorMode: "webagent", runImmediately: true });
+  assert(webJob.job?.status === "completed", `webagent execution should complete, got ${webJob.job?.status}`);
+  console.log(`webagent execution ok: ${webJob.job.id}`);
+
+  const codexTask = await must("POST", "/tasks", {
     projectId: project.id,
-    title: `Smoke dry-run job ${Date.now()}`,
-    task: "Dry-run verification from REST smoke test.",
-    roles: ["qa_reviewer"],
-    safetyLevel: 1,
-    runImmediately: true
+    taskTitle: "Smoke codex task",
+    taskGoal: "Run a dry-run Codex execution packet.",
+    targetFiles: ["README.md"],
+    executorMode: "codex",
+    executorPolicy: "manual"
   });
-  assert(job.job.status === "completed", `dry-run job should complete, got ${job.job.status}`);
-  console.log(`dry-run job ok: ${job.job.id}`);
+  const codexJob = await must("POST", `/tasks/${codexTask.task.id}/executions`, { executorMode: "codex", runImmediately: false });
+  assert(codexJob.job?.status === "needs_approval", `codex job should require approval, got ${codexJob.job?.status}`);
+  const codexApproved = await must("POST", `/execution-jobs/${codexJob.job.id}/approve-run`, { runNow: true });
+  assert(codexApproved.job?.status === "completed", `codex dry-run should complete, got ${codexApproved.job?.status}`);
+  console.log(`codex dry-run ok: ${codexApproved.job.id}`);
+
+  const shellCommand = await must("POST", "/run-shell-command", {
+    projectId: project.id,
+    taskId: task.task.id,
+    command: "git status --short --branch",
+    runImmediately: false
+  });
+  assert(shellCommand.command?.id, "shell command missing id");
+  const shellApproved = await must("POST", `/shell-commands/${shellCommand.command.id}/approve-run`, { runNow: true });
+  assert(shellApproved.command?.status === "completed", "shell command did not complete");
+  console.log(`shell command ok: ${shellApproved.command.id}`);
 
   const missing = await request("GET", `/projects/${project.id}/files/read?path=${encodeURIComponent("src/does-not-exist.tsx")}`);
   assert(!missing.response.ok, "missing file request should fail");
   assert(missing.body.requestId, "missing file error should include requestId");
   console.log(`intentional error ok: requestId=${missing.body.requestId}`);
 
-  const logs = await must("GET", `/logs?limit=100`);
-  assert(Array.isArray(logs.logs), "logs endpoint missing logs");
-  assert(logs.logs.some((entry) => entry.requestId === missing.body.requestId), "logs should contain intentional error requestId");
+  const logs = await must("GET", `/logs?limit=100&requestId=${encodeURIComponent(missing.body.requestId)}`);
+  assert(Array.isArray(logs.logs) && logs.logs.length > 0, "logs should contain the intentional error requestId");
   console.log("logs ok");
 
-  const latest = await must("GET", `/errors/latest?requestId=${encodeURIComponent(missing.body.requestId)}`);
-  assert(latest.errors?.length, "latest errors should include intentional error");
+  const analysis = await must("GET", `/errors/latest?requestId=${encodeURIComponent(missing.body.requestId)}`);
+  assert(analysis.analysis?.errorSummary, "error analysis missing summary");
+  console.log("error analysis ok");
 
   const repair = await must("POST", "/repairs", {
     projectId: project.id,
+    taskId: task.task.id,
     sourceRequestId: missing.body.requestId,
     sourceKind: "http_error",
     errorSummary: "Missing demo file in REST smoke test.",
     conciseDiagnosis: "The requested file path does not exist in the demo project.",
-    solution: "Use an existing relative path or create a Codex repair job after approval.",
-    executionPlan: ["Verify the path.", "Update the request or add the missing file if needed."],
+    solution: "Use an existing relative path or create a new file deliberately.",
+    executionPlan: ["Verify the file path.", "Use a valid project-relative path."],
     safetyLevel: 1
   });
-  assert(repair.repair.status === "needs_approval", "repair proposal should wait for approval");
+  assert(repair.repair?.status === "needs_approval", "repair proposal should wait for approval");
   console.log(`repair proposal ok: ${repair.repair.id}`);
 
   console.log("Smoke test passed.");

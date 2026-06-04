@@ -1,64 +1,35 @@
-# ChatGPT Custom MCP 设置
+# ChatGPT Custom MCP Setup
 
-Bridge 的主线是 ChatGPT 自定义 MCP，不再以旧 OpenAPI Actions 为主。
+## 目标
 
-## 前提
+把 ChatGPT 网页端连到本地 Bridge 的 `/mcp`。
 
-1. Bridge 正在本机运行。
-2. Dashboard 可以打开：`http://localhost:8787/dashboard/`。
-3. 你已经有一个 HTTPS 地址转发到本机 8787，例如：
+## 步骤
 
-```text
-https://bridge.your-domain.com -> http://localhost:8787
+1. 本地启动 Bridge
+
+```powershell
+cd C:\Users\24981\Desktop\gpt-codex-bridge\bridge
+npm.cmd install --no-audit --no-fund
+npm.cmd run dev
 ```
 
-## ChatGPT 自定义 GPT 中填写
+2. 用 Cloudflare Tunnel 把 `http://localhost:8787` 暴露为 HTTPS
 
-Custom MCP Server URL：
+3. 在 ChatGPT Custom MCP 中填写：
 
-```text
-https://bridge.your-domain.com/mcp
-```
+- Server URL: `https://your-domain/mcp`
+- Auth type: `Access token / API key`
+- Token value: Dashboard Setup 页显示的本地配对码
 
-认证方式：
+4. 第一次连接成功后，建议先调用：
 
-```text
-访问令牌 / API 密钥
-```
+- `get_bridge_status`
+- `list_projects`
 
-值：
+## 配对码
 
-```text
-dashboard 连接向导显示的本地配对码
-```
-
-Bridge 后端推荐使用：
-
-```http
-x-api-key: <本地配对码>
-```
-
-旧客户端如果只能发送 Bearer，也仍然兼容。
-
-## 第一次测试
-
-在主控 GPT 中说：
-
-```text
-请调用 get_bridge_status 检查 Bridge 是否在线。
-```
-
-然后继续：
-
-```text
-请列出已注册项目。
-请浏览可选文件夹根目录。
-请读取当前项目结构。
-```
-
-## 注意
-
-- 不要把本地配对码公开到 GitHub。
-- 不需要 OAuth；当前推荐访问令牌 / API 密钥。
-- OpenAPI `bridge/openapi/action-schema.yaml` 只是 legacy 兼容文件。
-- 日常任务应由主控 GPT 自动调用 MCP tools，不需要用户反复复制上下文。
+- 配对码是本地 Bridge 的访问令牌
+- 不要把它叫 Bearer token 给用户心智负担
+- 它保存在 `bridge/data/runtime.json`
+- 普通用户只需要在 Dashboard 里复制，不需要手改文件

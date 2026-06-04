@@ -1,47 +1,37 @@
-# 安全模型
+# Security Model
 
-## 本地配对码
+## 1. 项目白名单
 
-Bridge 自动生成本地配对码，保存在：
+Bridge 只允许操作已注册项目根目录中的相对路径。
 
-```text
-bridge\data\runtime.json
-```
+## 2. 权限模式
 
-Dashboard 会自动读取。ChatGPT Custom MCP 需要使用同一个配对码。
+- `read_only`
+- `manual_review`
+- `auto_review`
+- `full_access`
 
-## 项目白名单
+默认是 `auto_review`：低风险动作可自动通过，高风险执行、危险命令和敏感变更仍需要审批。
 
-所有文件读取和写入必须位于已注册项目目录内。以下路径会被阻止：
+## 3. Web patch
 
-- 绝对文件路径。
-- `..` 路径穿越。
-- `.git`、`node_modules`、`dist`、`build` 等忽略目录。
-- 未注册项目目录外的文件。
+- 草稿可以先生成
+- 真正写文件要经过权限模式和审批路径
+- revert 依赖本地备份元数据
 
-## 权限模式
+## 4. Shell command
 
-- `read_only`：只读检查，禁止写文件和危险执行。
-- `manual_review`：关键动作进入人工审批。
-- `auto_review`：低风险读取、上下文包、patch 草稿和低风险自动动作可执行；高风险仍需审批。
-- `full_access`：危险模式，必须输入 `I understand` 或 `我已理解风险`。
+- 危险命令不能静默执行
+- 默认要求审批
+- 记录 `stdout` / `stderr` / `exitCode`
 
-## 需要审批的动作
+## 5. Codex
 
-- apply/revert patch。
-- 覆盖或删除文件。
-- 运行 shell 命令。
-- 安装依赖。
-- git commit / push。
-- 切换 full_access。
-- 修改项目目录之外的文件。
+- `dry-run` 默认最安全
+- `cli` 和 `app-server` 使用本机当前 Codex 账户
+- Bridge 不管理账户切换
 
-## 日志
+## 6. 配对码
 
-日志路径：
-
-```text
-bridge\data\logs\YYYY-MM-DD.jsonl
-```
-
-每条日志包含时间、级别、requestId、来源、动作、消息和详情。不要把包含敏感路径或错误详情的日志原样公开到 GitHub issue，先检查内容。
+- 本地配对码保护 REST 和 `/mcp`
+- `bootstrap` 只给本机回环地址

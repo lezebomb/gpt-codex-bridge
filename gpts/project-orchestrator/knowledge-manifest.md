@@ -1,23 +1,29 @@
-# 主控 GPT Knowledge 文件清单
+# Knowledge Manifest
 
-建议上传到 Custom GPT Knowledge 的文档：
+建议上传到 Custom GPT Knowledge 的文件：
 
 - `docs/chatgpt-custom-mcp-setup.md`
 - `docs/mcp-tools-reference.md`
 - `docs/task-workflow.md`
+- `docs/executors.md`
+- `docs/webagent-runtime.md`
+- `docs/codex-executor.md`
+- `docs/external-executors.md`
 - `docs/security-model.md`
-- `docs/codex-connection.md`
 - `docs/troubleshooting.md`
-- `docs/mcp-center.md`
 - `docs/windows-quickstart.md`
 
-这些文件定义：
+这些文件覆盖：
 
-- 如何连接 Bridge。
-- MCP tools 如何使用。
-- 网页补丁与 Codex 任务的分工。
-- 权限模式和安全边界。
-- 错误日志与修复流程。
-- 交叉审查回合上限。
+- ChatGPT Custom MCP 如何连到本地 Bridge
+- 项目、任务、执行器和上下文包的工作流
+- MCP tools 的输入输出含义
+- WebAgent / Codex / Hybrid / External 的分工
+- 权限模式、安全边界、审批路径
+- 日志与故障诊断
 
-不要把 `bridge\data\runtime.json` 或任何本地配对码上传到 Knowledge。
+不要上传：
+
+- `bridge/data/runtime.json`
+- 本地配对码
+- 任意用户私密项目源码

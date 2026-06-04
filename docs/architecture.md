@@ -32,8 +32,8 @@ Bridge 只读写已注册项目目录内的相对路径。文件读取、补丁�
 ### 4. 权限模式
 
 - `read_only`：只读检查。
-- `manual_review`：默认推荐，关键动作人工确认。
-- `auto_review`：低风险任务可自动运行。
+- `manual_review`：保守模式，关键动作人工确认。
+- `auto_review`：默认模式，低风险任务可自动运行。
 - `full_access`：危险模式，必须显式输入确认语。
 
 ### 5. Codex 执行

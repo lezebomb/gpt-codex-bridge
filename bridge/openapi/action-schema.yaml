@@ -1,8 +1,10 @@
 openapi: 3.1.0
 info:
-  title: ChatGPT Codex Orchestrator Bridge
-  version: 1.0.0
-  description: Local bridge for a ChatGPT project-orchestrator GPT. It can inspect whitelisted local projects, read selected files, create context packs, propose ChatGPT-authored patches, create and approve Codex jobs, view logs/errors, create repair proposals, run bounded cross-review, and coordinate GitHub/Codex workflows.
+  title: ChatGPT Web-first Bridge Legacy Actions
+  version: 2.0.0
+  description: |
+    This OpenAPI file is kept only as a legacy compatibility layer.
+    The primary product path is ChatGPT Custom MCP against /mcp.
 servers:
   - url: https://YOUR-TUNNEL-DOMAIN.example.com
 security:
@@ -11,461 +13,67 @@ paths:
   /health:
     get:
       operationId: health_check
-      summary: Check bridge status.
+      summary: Check basic bridge health.
       security: []
       responses:
-        '200': { description: Bridge health }
+        '200':
+          description: Health response
   /config:
     get:
       operationId: get_bridge_config
-      summary: Read execution mode, permission mode, and settings.
+      summary: Read current bridge runtime and permission settings.
       responses:
-        '200': { description: Bridge config }
-  /config/access-mode:
-    post:
-      operationId: set_bridge_access_mode
-      summary: Set permission mode. full_access requires confirmFullAccess exactly I understand.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [permissionMode]
-              properties:
-                permissionMode: { type: string, enum: [read_only, manual_review, auto_review, full_access] }
-                confirmFullAccess: { type: string }
-                logLevel: { type: string, enum: [info, debug] }
-      responses:
-        '200': { description: Updated settings }
-  /logs:
-    get:
-      operationId: list_bridge_logs
-      summary: Read recent bridge logs.
-      parameters:
-        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
-        - { name: level, in: query, required: false, schema: { type: string, enum: [debug, info, warn, error] } }
-      responses:
-        '200': { description: Recent logs }
-  /errors/latest:
-    get:
-      operationId: get_latest_errors
-      summary: Read latest errors, optionally by requestId, so ChatGPT can diagnose them.
-      parameters:
-        - { name: requestId, in: query, required: false, schema: { type: string } }
-        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 20, default: 5 } }
-      responses:
-        '200': { description: Latest errors }
-  /diagnostics:
-    get:
-      operationId: read_bridge_diagnostics
-      summary: Read runtime diagnostics and recent error counts.
-      responses:
-        '200': { description: Diagnostics }
-  /support-bundle:
-    get:
-      operationId: get_support_bundle
-      summary: Return a compact troubleshooting bundle with config, counts, warnings, and errors.
-      responses:
-        '200': { description: Support bundle }
-  /task-templates:
-    get:
-      operationId: list_task_templates
-      summary: List predefined Codex job templates.
-      responses:
-        '200': { description: Task templates }
-  /roles:
-    get:
-      operationId: list_roles
-      summary: List available role protocol files.
-      responses:
-        '200': { description: Role list }
-  /skills:
-    get:
-      operationId: list_codex_skills
-      summary: List bundled Codex skills.
-      responses:
-        '200': { description: Skill list }
+        '200':
+          description: Bridge config
   /projects:
     get:
       operationId: list_projects
-      summary: List registered local projects.
+      summary: List registered projects.
       responses:
-        '200': { description: Project list }
+        '200':
+          description: Project list
     post:
       operationId: register_project
-      summary: Register a local project path.
+      summary: Register a project path.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [name, path]
+              required: [path]
               properties:
-                name: { type: string }
                 path: { type: string }
-                allowShell: { type: boolean, default: false }
+                displayName: { type: string }
+                allowShell: { type: boolean }
       responses:
-        '201': { description: Registered project }
-  /projects/{id}/inspect:
+        '201':
+          description: Registered project
+  /tasks:
     get:
-      operationId: inspect_project
-      summary: Inspect a registered project.
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
+      operationId: list_tasks
+      summary: List tasks.
       responses:
-        '200': { description: Project summary }
-  /projects/{id}/tree:
-    get:
-      operationId: list_project_tree
-      summary: List a bounded project file tree.
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 1000, default: 250 } }
-      responses:
-        '200': { description: File tree }
-  /projects/{id}/files/read:
-    get:
-      operationId: read_project_file
-      summary: Read one whitelisted project file by relative path.
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - { name: path, in: query, required: true, schema: { type: string } }
-      responses:
-        '200': { description: File content }
-  /projects/{id}/snapshot:
+        '200':
+          description: Task list
     post:
-      operationId: create_project_snapshot
-      summary: Return selected project files plus tree and metadata.
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                paths: { type: array, items: { type: string } }
-                includeTree: { type: boolean, default: true }
-                maxFiles: { type: integer, minimum: 1, maximum: 80, default: 40 }
-      responses:
-        '200': { description: Snapshot }
-  /projects/{id}/context-pack:
-    post:
-      operationId: create_context_pack
-      summary: Create a markdown context pack for ChatGPT planning or code review.
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                paths: { type: array, items: { type: string } }
-                includeTree: { type: boolean, default: true }
-                includeGitStatus: { type: boolean, default: true }
-                includeDiff: { type: boolean, default: false }
-                includeRoles: { type: boolean, default: true }
-                includeSkills: { type: boolean, default: true }
-                notes: { type: string }
-      responses:
-        '201': { description: Context pack }
-  /projects/{id}/test-plan:
-    get:
-      operationId: get_project_test_plan
-      summary: Infer verification commands from package.json.
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-      responses:
-        '200': { description: Test plan }
-  /projects/{id}/test-job:
-    post:
-      operationId: create_project_test_job
-      summary: Create a Codex verification job from inferred project checks.
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                scope: { type: string }
-                runImmediately: { type: boolean, default: false }
-      responses:
-        '201': { description: Verification job }
-  /projects/{id}/git/status:
-    get:
-      operationId: get_git_status
-      summary: Get git status for a project.
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-      responses:
-        '200': { description: Git status }
-  /projects/{id}/git/diff:
-    get:
-      operationId: get_git_diff
-      summary: Get git diff for a project.
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - { name: cached, in: query, required: false, schema: { type: boolean, default: false } }
-      responses:
-        '200': { description: Git diff }
-  /web-patches:
-    get:
-      operationId: list_web_patches
-      summary: List ChatGPT-authored patch proposals.
-      responses:
-        '200': { description: Patch list }
-    post:
-      operationId: create_web_patch
-      summary: Create a ChatGPT-authored patch proposal. Does not write files until approved.
+      operationId: create_task
+      summary: Create a task.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [projectId, title, changes]
+              required: [projectId, taskGoal]
               properties:
                 projectId: { type: string }
-                title: { type: string }
-                rationale: { type: string }
-                changes:
-                  type: array
-                  items:
-                    type: object
-                    required: [filePath, content]
-                    properties:
-                      filePath: { type: string }
-                      content: { type: string }
-                      mode: { type: string, enum: [create, overwrite], default: overwrite }
+                taskTitle: { type: string }
+                taskGoal: { type: string }
       responses:
-        '201': { description: Created patch proposal }
-  /web-patches/{id}/diff:
-    get:
-      operationId: diff_web_patch
-      summary: Preview diff for a web patch.
-      parameters:
-        - $ref: '#/components/parameters/PatchId'
-      responses:
-        '200': { description: Patch diff }
-  /web-patches/{id}/apply:
-    post:
-      operationId: apply_web_patch
-      summary: Apply a web patch after user approval.
-      parameters:
-        - $ref: '#/components/parameters/PatchId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [confirm]
-              properties:
-                confirm: { type: boolean }
-                note: { type: string }
-      responses:
-        '200': { description: Applied patch }
-  /web-patches/{id}/revert:
-    post:
-      operationId: revert_web_patch
-      summary: Revert an applied web patch from local backup.
-      parameters:
-        - $ref: '#/components/parameters/PatchId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [confirm]
-              properties:
-                confirm: { type: boolean }
-                note: { type: string }
-      responses:
-        '200': { description: Reverted patch }
-  /web-patches/{id}/create-codex-review-job:
-    post:
-      operationId: create_codex_review_job_for_patch
-      summary: Create a Codex review job for a ChatGPT-authored patch.
-      parameters:
-        - $ref: '#/components/parameters/PatchId'
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                runImmediately: { type: boolean, default: false }
-      responses:
-        '201': { description: Review job }
-  /codex/jobs:
-    get:
-      operationId: list_codex_jobs
-      summary: List Codex jobs.
-      responses:
-        '200': { description: Job list }
-    post:
-      operationId: create_codex_job
-      summary: Create a Codex implementation job.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [projectId, title, task]
-              properties:
-                projectId: { type: string }
-                title: { type: string }
-                task: { type: string }
-                roles: { type: array, items: { type: string } }
-                safetyLevel: { type: integer, minimum: 1, maximum: 5, default: 2 }
-                runImmediately: { type: boolean, default: false }
-      responses:
-        '201': { description: Created job }
-  /codex/jobs/{id}:
-    get:
-      operationId: get_codex_job
-      summary: Read one Codex job and event timeline.
-      parameters:
-        - $ref: '#/components/parameters/JobId'
-      responses:
-        '200': { description: Job }
-  /codex/jobs/{id}/approve:
-    post:
-      operationId: approve_codex_job
-      summary: Approve a Codex job, optionally running it now.
-      parameters:
-        - $ref: '#/components/parameters/JobId'
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                runNow: { type: boolean, default: false }
-                note: { type: string }
-      responses:
-        '200': { description: Approved job }
-  /codex/jobs/{id}/run:
-    post:
-      operationId: run_codex_job
-      summary: Run an approved Codex job synchronously.
-      parameters:
-        - $ref: '#/components/parameters/JobId'
-      responses:
-        '200': { description: Completed job }
-  /codex/jobs/{id}/run-async:
-    post:
-      operationId: run_codex_job_async
-      summary: Start an approved Codex job in the background.
-      parameters:
-        - $ref: '#/components/parameters/JobId'
-      responses:
-        '202': { description: Started job }
-  /codex/account:
-    get:
-      operationId: read_codex_account
-      summary: Try to read current Codex app-server account/rate-limit state.
-      responses:
-        '200': { description: Account info or explanatory fallback }
-  /codex/approvals:
-    get:
-      operationId: list_codex_approvals
-      summary: List pending Codex app-server approval requests.
-      responses:
-        '200': { description: Approval list }
-  /codex/approvals/{id}/decision:
-    post:
-      operationId: decide_codex_approval
-      summary: Accept or decline a pending Codex app-server approval request.
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [decision]
-              properties:
-                decision: { type: string, enum: [accept, decline, cancel] }
-                note: { type: string }
-      responses:
-        '200': { description: Approval updated }
-  /repairs:
-    get:
-      operationId: list_repair_proposals
-      summary: List repair proposals.
-      responses:
-        '200': { description: Repair proposals }
-    post:
-      operationId: create_repair_proposal
-      summary: Create a concise repair proposal after ChatGPT analyzes a bridge or job error.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [errorSummary, conciseDiagnosis, solution, executionPlan]
-              properties:
-                projectId: { type: string }
-                sourceRequestId: { type: string }
-                sourceLogId: { type: string }
-                sourceKind: { type: string, enum: [http_error, job_failure, manual], default: manual }
-                errorSummary: { type: string }
-                conciseDiagnosis: { type: string }
-                solution: { type: string }
-                executionPlan: { type: array, items: { type: string } }
-                codexTask: { type: string }
-                safetyLevel: { type: integer, minimum: 1, maximum: 5, default: 2 }
-      responses:
-        '201': { description: Repair proposal }
-  /repairs/{id}/approve:
-    post:
-      operationId: approve_repair_proposal
-      summary: Approve a repair proposal and create/run a Codex repair job.
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                runNow: { type: boolean, default: false }
-                note: { type: string }
-      responses:
-        '200': { description: Repair approved }
+        '201':
+          description: Created task
 components:
-  parameters:
-    ProjectId:
-      name: id
-      in: path
-      required: true
-      schema: { type: string }
-    JobId:
-      name: id
-      in: path
-      required: true
-      schema: { type: string }
-    PatchId:
-      name: id
-      in: path
-      required: true
-      schema: { type: string }
   securitySchemes:
     bearerAuth:
       type: http
