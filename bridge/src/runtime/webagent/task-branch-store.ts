@@ -11,6 +11,9 @@ export class TaskBranchStore {
     const branch: TaskBranchRecord = {
       ...input,
       id: nanoid(10),
+      isolationMode: input.isolationMode || "in_place",
+      worktreeStatus: input.worktreeStatus || "not_created",
+      runIds: uniqueStrings(input.runIds || []),
       touchedFiles: uniqueStrings(input.touchedFiles),
       patchIds: uniqueStrings(input.patchIds),
       contextPackIds: uniqueStrings(input.contextPackIds),
@@ -55,7 +58,17 @@ export class TaskBranchStore {
       branch.retrievedContextIds = uniqueStrings(branch.retrievedContextIds);
       branch.approvalIds = uniqueStrings(branch.approvalIds);
       branch.logRequestIds = uniqueStrings(branch.logRequestIds);
+      branch.runIds = uniqueStrings(branch.runIds || []);
+      branch.isolationMode = branch.isolationMode || "in_place";
+      branch.worktreeStatus = branch.worktreeStatus || "not_created";
       return branch;
+    });
+  }
+
+  linkRun(taskBranchId: string, runId: string): TaskBranchRecord {
+    return this.update(taskBranchId, (branch) => {
+      branch.activeRunId = runId;
+      branch.runIds.push(runId);
     });
   }
 

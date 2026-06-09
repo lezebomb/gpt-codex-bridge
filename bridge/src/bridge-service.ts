@@ -7,7 +7,7 @@ import { nanoid } from "nanoid";
 import { CONTEXT_PACKS_DIR, EXTERNAL_EXECUTOR_CONFIG_FILE, HOST, MCP_PLUGINS, MIN_NODE_MAJOR, PORT, ROLE_DIR, VERSION } from "./config.js";
 import { compactForLog, ensureDir, filePreview, now } from "./lib/common.js";
 import { assertSafeRelativePath, findReadmePreview, inferTechStack, listBrowsableDirectories, listFilesystemRoots, readProjectFile, safeProjectPath } from "./project-files.js";
-import { ApprovalRequest, BridgeState, ContextPackBudget, ContextPackRecord, ExecutionJob, ExecutorMode, ExecutorPacket, ExecutorPolicy, ExternalExecutorConfig, McpPluginRuntimeConfig, Project, ProjectIndexRecord, RepairProposal, RetrievedContextRecord, ReviewSession, TaskBranchRecord, TaskRecord, UiScreenshotRequest, WebPatch } from "./types.js";
+import { ApprovalActionType, ApprovalRequest, BridgeState, ContextPackBudget, ContextPackRecord, ExecutionJob, ExecutorMode, ExecutorPacket, ExecutorPolicy, ExternalExecutorConfig, McpPluginRuntimeConfig, Project, ProjectIndexRecord, RepairProposal, RetrievedContextRecord, ReviewSession, RuntimeEventType, TaskBranchRecord, TaskRecord, ToolMetadata, UiScreenshotRequest, WebPatch } from "./types.js";
 import { ExecutorRouter } from "./executors/router.js";
 import { WebAgentExecutor } from "./executors/webagent-executor.js";
 import { HybridExecutor } from "./executors/hybrid-executor.js";
@@ -28,11 +28,21 @@ import { ProjectIndexer } from "./runtime/context/project-indexer.js";
 import { RuntimeStore } from "./runtime/runtime-store.js";
 import { StateStore } from "./runtime/state-store.js";
 import { LogStore } from "./runtime/log-store.js";
+import { EventStore } from "./runtime/events/event-store.js";
+import { RunStore } from "./runtime/events/run-store.js";
+import { ToolRegistry } from "./runtime/tools/tool-registry.js";
+import { ApprovalPolicyEngine } from "./runtime/tools/tool-permission.js";
+import { TaskWorktreeManager } from "./runtime/isolation/task-worktree-manager.js";
 
 export class BridgeService {
   readonly runtimeStore = new RuntimeStore();
   readonly stateStore = new StateStore();
   readonly logStore = new LogStore();
+  readonly eventStore = new EventStore();
+  readonly runStore = new RunStore();
+  readonly toolRegistry = new ToolRegistry();
+  readonly approvalPolicyEngine = new ApprovalPolicyEngine();
+  readonly taskWorktreeManager = new TaskWorktreeManager();
   readonly diffManager = new DiffManager();
   readonly instructionLoader = new InstructionLoader();
   readonly skillLoader = new SkillLoader();
@@ -50,6 +60,203 @@ export class BridgeService {
   readonly hybridExecutor = new HybridExecutor();
   readonly externalExecutor = new ExternalExecutor();
   readonly codexExecutor = new CodexExecutor(this.runtimeStore, this.stateStore, this.approvalEngine, this.logStore);
+
+  private createRun(input: { title: string; projectId?: string; taskId?: string; taskBranchId?: string; executorMode?: ExecutorMode; toolName?: string; requestId?: string; metadata?: Record<string, unknown> }) {
+    const run = this.runStore.create(input);
+    this.eventStore.append({
+      runId: run.id,
+      type: "run.created",
+      projectId: input.projectId,
+      taskId: input.taskId,
+      taskBranchId: input.taskBranchId,
+      executorMode: input.executorMode,
+      toolName: input.toolName,
+      requestId: input.requestId,
+      message: `Run created: ${input.title}`,
+      data: input.metadata
+    });
+    if (input.taskBranchId) {
+      this.taskBranchStore.linkRun(input.taskBranchId, run.id);
+    }
+    return run;
+  }
+
+  private startRun(runId: string) {
+    const run = this.runStore.start(runId);
+    this.eventStore.append({
+      runId,
+      type: "run.started",
+      projectId: run.projectId,
+      taskId: run.taskId,
+      taskBranchId: run.taskBranchId,
+      executorMode: run.executorMode,
+      toolName: run.toolName,
+      requestId: run.requestId,
+      message: "Run started."
+    });
+    return run;
+  }
+
+  private finishRun(runId: string, status: "completed" | "failed" | "waiting_for_approval" | "waiting_for_user", message: string, data?: unknown) {
+    const run = this.runStore.setStatus(runId, status);
+    this.eventStore.append({
+      runId,
+      type: status === "failed" ? "tool.failed" : "tool.completed",
+      projectId: run.projectId,
+      taskId: run.taskId,
+      taskBranchId: run.taskBranchId,
+      executorMode: run.executorMode,
+      toolName: run.toolName,
+      requestId: run.requestId,
+      message,
+      data
+    });
+    return run;
+  }
+
+  private appendRunEvent(input: { runId: string; type: RuntimeEventType; message: string; data?: unknown }) {
+    const run = this.runStore.get(input.runId);
+    return this.eventStore.append({
+      runId: input.runId,
+      type: input.type,
+      projectId: run.projectId,
+      taskId: run.taskId,
+      taskBranchId: run.taskBranchId,
+      executorMode: run.executorMode,
+      toolName: run.toolName,
+      requestId: run.requestId,
+      message: input.message,
+      data: input.data
+    });
+  }
+
+  private createApprovalRequest(input: {
+    method: string;
+    params: unknown;
+    projectId?: string;
+    taskId?: string;
+    taskBranchId?: string;
+    runId?: string;
+    toolName?: string;
+    actionType?: ApprovalActionType;
+    riskLevel?: ApprovalRequest["riskLevel"];
+    patchId?: string;
+    shellCommandId?: string;
+    executionJobId?: string;
+    repairProposalId?: string;
+    affectedFiles?: string[];
+    command?: string;
+    suggestedDecision?: ApprovalRequest["suggestedDecision"];
+    preflightReport?: ApprovalRequest["preflightReport"];
+  }): ApprovalRequest {
+    const approval: ApprovalRequest = {
+      id: nanoid(10),
+      method: input.method,
+      params: input.params,
+      projectId: input.projectId,
+      taskId: input.taskId,
+      taskBranchId: input.taskBranchId,
+      runId: input.runId,
+      toolName: input.toolName,
+      actionType: input.actionType,
+      riskLevel: input.riskLevel,
+      patchId: input.patchId,
+      shellCommandId: input.shellCommandId,
+      executionJobId: input.executionJobId,
+      repairProposalId: input.repairProposalId,
+      affectedFiles: input.affectedFiles,
+      command: input.command,
+      suggestedDecision: input.suggestedDecision,
+      preflightReport: input.preflightReport,
+      status: "pending",
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      events: [{ at: now(), type: "approval_required", message: `${input.method} requires approval.` }],
+      createdAt: now(),
+      updatedAt: now()
+    };
+    this.stateStore.update((state) => {
+      state.approvalRequests.push(approval);
+      if (input.taskId) {
+        const task = state.tasks.find((item) => item.id === input.taskId);
+        if (task) task.approvals.push(approval.id);
+      }
+      if (input.taskBranchId) {
+        const branch = state.taskBranches.find((item) => item.id === input.taskBranchId);
+        if (branch) branch.approvalIds.push(approval.id);
+      }
+    });
+    if (input.runId) {
+      this.appendRunEvent({ runId: input.runId, type: "approval.required", message: `${input.method} requires approval.`, data: approval });
+      this.runStore.setStatus(input.runId, "waiting_for_approval");
+    }
+    return approval;
+  }
+
+  private projectForBranchWorkspace(project: Project, branch?: TaskBranchRecord): Project {
+    if (!branch?.workspacePath || branch.workspacePath === project.path) return project;
+    return { ...project, path: branch.workspacePath };
+  }
+
+  beginToolRun(toolName: string, args: unknown, requestId: string) {
+    const metadata = this.toolRegistry.get(toolName);
+    const typedArgs = args && typeof args === "object" ? args as Record<string, unknown> : {};
+    const run = this.createRun({
+      title: `MCP tool: ${toolName}`,
+      projectId: typeof typedArgs.projectId === "string" ? typedArgs.projectId : undefined,
+      taskId: typeof typedArgs.taskId === "string" ? typedArgs.taskId : undefined,
+      taskBranchId: typeof typedArgs.taskBranchId === "string" ? typedArgs.taskBranchId : undefined,
+      executorMode: typeof typedArgs.executorMode === "string" ? typedArgs.executorMode as ExecutorMode : undefined,
+      toolName,
+      requestId,
+      metadata: { riskLevel: metadata?.riskLevel, sideEffects: metadata?.sideEffects }
+    });
+    this.startRun(run.id);
+    this.appendRunEvent({ runId: run.id, type: "tool.called", message: `MCP tool called: ${toolName}`, data: args });
+    return run;
+  }
+
+  completeToolRun(runId: string, result?: unknown) {
+    const current = this.runStore.get(runId);
+    if (["waiting_for_approval", "waiting_for_user", "cancelled"].includes(current.status)) {
+      this.eventStore.append({
+        runId,
+        type: "tool.completed",
+        projectId: current.projectId,
+        taskId: current.taskId,
+        taskBranchId: current.taskBranchId,
+        executorMode: current.executorMode,
+        toolName: current.toolName,
+        requestId: current.requestId,
+        message: "MCP tool completed; run remains in its current waiting/cancelled state.",
+        data: result
+      });
+      return current;
+    }
+    const resultJobStatus = result && typeof result === "object" ? (result as { job?: { status?: string } }).job?.status : undefined;
+    const resultCommandStatus = result && typeof result === "object" ? (result as { command?: { status?: string } }).command?.status : undefined;
+    const pendingStatus = resultJobStatus || resultCommandStatus;
+    if (pendingStatus === "queued") {
+      const run = this.runStore.setStatus(runId, "queued");
+      this.eventStore.append({
+        runId,
+        type: "tool.completed",
+        projectId: current.projectId,
+        taskId: current.taskId,
+        taskBranchId: current.taskBranchId,
+        executorMode: current.executorMode,
+        toolName: current.toolName,
+        requestId: current.requestId,
+        message: "MCP tool completed; run remains queued for later execution.",
+        data: result
+      });
+      return run;
+    }
+    return this.finishRun(runId, "completed", "MCP tool completed.", result);
+  }
+
+  failToolRun(runId: string, error: unknown) {
+    return this.finishRun(runId, "failed", "MCP tool failed.", { error: error instanceof Error ? error.message : String(error) });
+  }
 
   getBootstrap() {
     const runtime = this.runtimeStore.load();
@@ -144,6 +351,77 @@ export class BridgeService {
     };
   }
 
+  getToolRegistry(input?: { category?: ToolMetadata["category"] }) {
+    return { tools: this.toolRegistry.list(input?.category) };
+  }
+
+  getToolPolicy(input?: { toolName?: string }) {
+    const settings = this.stateStore.readSettings();
+    const tool = input?.toolName ? this.toolRegistry.get(input.toolName) : undefined;
+    return {
+      permissionMode: settings.permissionMode,
+      rules: {
+        read_only: "Allows file_read, context_index, and retrieve_context; blocks writes and external actions.",
+        auto_review: "Allows file_read, context_index, retrieve_context, patch_draft, and shell_readonly; requires approval for patch_apply, shell_write, dependency_install, git_write, external_executor, network_access, worktree_create, and workspace_delete.",
+        manual_review: "Allows low-risk preparation; requires approval for side effects.",
+        full_access: "Allows actions but records audit warnings."
+      },
+      tool: tool ? {
+        ...tool,
+        policyDecision: this.approvalPolicyEngine.decide({
+          mode: settings.permissionMode,
+          actionType: tool.name === "request_apply_patch" ? "patch_apply" : tool.name === "run_shell_command" ? "shell_write" : tool.name === "create_execution_job" ? "external_executor" : "file_read",
+          riskLevel: tool.riskLevel
+        })
+      } : undefined
+    };
+  }
+
+  explainToolRisk(input: { toolName: string }) {
+    return this.toolRegistry.explain(input.toolName);
+  }
+
+  listRuns(input?: { projectId?: string; taskId?: string; taskBranchId?: string; status?: any; limit?: number }) {
+    return this.runStore.list(input);
+  }
+
+  getRun(runId: string) {
+    return { run: this.runStore.get(runId), events: this.eventStore.list({ runId, limit: 300 }) };
+  }
+
+  getRunEvents(input: { runId?: string; projectId?: string; taskId?: string; taskBranchId?: string; requestId?: string; limit?: number }) {
+    return this.eventStore.list(input);
+  }
+
+  cancelRun(input: { runId: string; reason?: string }) {
+    const run = this.runStore.cancel(input.runId, input.reason);
+    this.eventStore.append({
+      runId: run.id,
+      type: "run.cancelled",
+      projectId: run.projectId,
+      taskId: run.taskId,
+      taskBranchId: run.taskBranchId,
+      executorMode: run.executorMode,
+      toolName: run.toolName,
+      requestId: run.requestId,
+      message: input.reason || "Run cancelled by user.",
+      data: { limitation: "Current cancellation marks bridge state as cancelled. Long-running child process interruption is best-effort and executor-specific." }
+    });
+    this.stateStore.update((state) => {
+      for (const job of state.executionJobs.filter((item) => item.runId === run.id && ["queued", "running", "needs_approval"].includes(item.status))) {
+        job.status = "cancelled";
+        job.updatedAt = now();
+        job.events.push({ at: now(), type: "execution_cancelled", message: input.reason || "Run cancelled." });
+      }
+      for (const command of state.shellCommands.filter((item) => item.runId === run.id && ["queued", "running", "needs_approval"].includes(item.status))) {
+        command.status = "cancelled";
+        command.updatedAt = now();
+        command.events.push({ at: now(), type: "command_cancelled", message: input.reason || "Run cancelled." });
+      }
+    });
+    return { run, cancelled: true, limitation: "Process kill is best-effort; current executors persist cancellable state and document limitations." };
+  }
+
   updateMcpPlugin(input: { pluginId: string; enabled?: boolean; config?: Record<string, unknown> }, requestId?: string) {
     const plugin = MCP_PLUGINS.find((item) => item.id === input.pluginId);
     if (!plugin) throw new Error("MCP plugin not found");
@@ -188,52 +466,7 @@ export class BridgeService {
   }
 
   getMcpToolCatalog() {
-    return [
-      ["get_bridge_status", "Read bridge version, modes, default executor, project count, task count, and recent error summary."],
-      ["get_setup_guide", "Read the local setup guide for Windows PowerShell and ChatGPT Custom MCP."],
-      ["browse_folders", "Browse safe local directories for file-manager style project selection."],
-      ["select_project", "Register a folder as a project allowlist root and return projectId."],
-      ["list_projects", "List registered local projects."],
-      ["inspect_project", "Inspect tree, README, package.json, rules, git status, and tech stack."],
-      ["read_file", "Read one file inside a registered project root."],
-      ["index_project", "Create or refresh a token-conscious project context index backed by SQLite FTS."],
-      ["get_index_status", "Read indexed file count, last indexed time, stale files, and provider status."],
-      ["search_project", "Search the indexed project context and return concise matches plus snippets."],
-      ["retrieve_context", "Retrieve a small, relevant context bundle for one query instead of dumping full files."],
-      ["refresh_context_index", "Force-refresh the project context index."],
-      ["create_context_pack", "Create a bounded context pack for one task goal."],
-      ["create_task", "Create a task with executor routing and conflict detection."],
-      ["list_tasks", "List tasks."],
-      ["get_task", "Read one task and its related state."],
-      ["continue_task", "Continue a task in a new conversation."],
-      ["create_task_branch", "Create a new task branch under one task for a separate ChatGPT conversation."],
-      ["list_task_branches", "List task branches by project or task."],
-      ["get_task_branch", "Read one task branch plus linked task, context, and patch state."],
-      ["continue_task_branch", "Continue one task branch and get the recommended next action."],
-      ["rename_task_branch", "Rename one task branch or update its chat title hint."],
-      ["archive_task_branch", "Archive one task branch without deleting history."],
-      ["set_active_task_branch", "Mark one task branch as the active branch for its task."],
-      ["detect_branch_conflicts", "Detect overlapping touched files and stale git-head conflicts across active branches."],
-      ["propose_web_patch", "Create a bounded patch draft without writing files immediately."],
-      ["get_patch_diff", "Read a patch diff."],
-      ["get_patch_conflict_status", "Read stale-base and Task Branch conflict status for one patch."],
-      ["request_apply_patch", "Apply a patch when permission mode allows it, or defer to dashboard approval."],
-      ["request_revert_patch", "Revert a patch when permission mode allows it, or defer to dashboard approval."],
-      ["run_shell_command", "Create a shell command request with timeout, cwd, and approval handling."],
-      ["create_execution_job", "Create an execution job for WebAgent, Codex, Hybrid, or External."],
-      ["get_execution_job", "Read an execution job result."],
-      ["get_latest_logs", "Read recent logs."],
-      ["analyze_error_log", "Analyze the latest or matching error log."],
-      ["create_repair_proposal", "Create a repair proposal that requires approval."],
-      ["create_ui_screenshot_job", "Create a screenshot review job."],
-      ["get_ui_screenshot_result", "Read a screenshot review result."],
-      ["create_cross_review", "Open a bounded cross review."],
-      ["add_cross_review_round", "Add one bounded cross review round."],
-      ["finalize_cross_review", "Finalize a cross review."],
-      ["create_webagent_task", "Shortcut: create a WebAgent task and its execution job."],
-      ["create_codex_job", "Legacy alias for a Codex execution job."],
-      ["get_codex_job", "Legacy alias for reading a Codex execution job."]
-    ].map(([name, description]) => ({ name, description }));
+    return this.toolRegistry.list();
   }
 
   listProjects() {
@@ -453,6 +686,9 @@ export class BridgeService {
         state.projectIndexes.push(manifest);
       }
     });
+    const run = this.createRun({ title: "Index project context", projectId: project.id, toolName: "index_project", metadata: { force: Boolean(input.force) } });
+    this.finishRun(run.id, "completed", "Project context indexed.", manifest);
+    this.eventStore.append({ runId: run.id, type: "context.indexed", projectId: project.id, toolName: "index_project", message: "Context index refreshed.", data: manifest });
     return manifest;
   }
 
@@ -518,6 +754,10 @@ export class BridgeService {
         label: `Context retrieval: ${input.query}`,
         filePaths: record.relevantFiles
       });
+      const branch = this.taskBranchStore.get(input.taskBranchId);
+      if (branch.activeRunId) {
+        this.appendRunEvent({ runId: branch.activeRunId, type: "context.retrieved", message: "Context retrieved for Task Branch.", data: { retrievedContextId: record.id, relevantFiles: record.relevantFiles } });
+      }
     }
     return record;
   }
@@ -570,6 +810,10 @@ export class BridgeService {
       executorLocked: task.executorLocked,
       executorDecisionReason: task.executorDecisionReason,
       baseGitHead: this.readGitHead(project),
+      currentGitHead: this.readGitHead(project),
+      isolationMode: "in_place",
+      worktreeStatus: "not_created",
+      runIds: [],
       touchedFiles: targetFiles,
       patchIds: [],
       contextPackIds: [],
@@ -684,6 +928,10 @@ export class BridgeService {
       executorDecisionReason: task.executorDecisionReason,
       executorSwitchReason: task.executorSwitchReason,
       baseGitHead: this.readGitHead(project),
+      currentGitHead: this.readGitHead(project),
+      isolationMode: "in_place",
+      worktreeStatus: "not_created",
+      runIds: [],
       touchedFiles: (input.touchedFiles || task.claimedFiles).map((filePath) => assertSafeRelativePath(filePath)),
       patchIds: [],
       contextPackIds: [],
@@ -716,12 +964,17 @@ export class BridgeService {
 
   async continueTaskBranch(input: { taskBranchId: string; note?: string; createContextPack?: boolean }) {
     const branch = this.taskBranchStore.get(input.taskBranchId);
-    return this.continueTask({
+    const run = this.createRun({ title: `Continue Task Branch: ${branch.branchName}`, projectId: branch.projectId, taskId: branch.taskId, taskBranchId: branch.id, executorMode: branch.executorMode, toolName: "continue_task_branch", metadata: { note: input.note, createContextPack: input.createContextPack } });
+    this.startRun(run.id);
+    const result = await this.continueTask({
       taskId: branch.taskId,
       taskBranchId: branch.id,
       note: input.note,
       createContextPack: input.createContextPack
     });
+    const nextStatus = result.approvalNeeded ? "waiting_for_approval" : result.recommendedNextAction === "retrieve_context" ? "waiting_for_user" : "completed";
+    this.finishRun(run.id, nextStatus, `Continue Task Branch finished: ${result.recommendedNextAction}`, result);
+    return { ...result, runId: run.id, timeline: this.eventStore.list({ runId: run.id, limit: 100 }) };
   }
 
   renameTaskBranch(input: { taskBranchId: string; branchName: string; chatTitleHint?: string }) {
@@ -757,11 +1010,88 @@ export class BridgeService {
     });
   }
 
+  recommendIsolationMode(input: { taskBranchId?: string; executorMode?: ExecutorMode; touchedFiles?: string[]; riskHint?: "low" | "medium" | "high" }) {
+    const branch = input.taskBranchId ? this.taskBranchStore.get(input.taskBranchId) : undefined;
+    const project = branch ? this.getProject(branch.projectId) : undefined;
+    const executorMode = branch?.executorMode || input.executorMode || "webagent";
+    const touchedFiles = branch?.touchedFiles || input.touchedFiles || [];
+    const isGitRepo = project ? this.taskWorktreeManager.isGitRepo(project.path) : false;
+    return {
+      taskBranchId: branch?.id,
+      executorMode,
+      touchedFiles,
+      isGitRepo,
+      ...this.taskWorktreeManager.recommend({ executorMode, touchedFiles, isGitRepo, riskHint: input.riskHint })
+    };
+  }
+
+  createTaskWorktree(input: { taskBranchId: string; isolationMode?: "in_place" | "git_worktree" | "copy_workspace" }, requestId?: string, runId?: string) {
+    const branch = this.taskBranchStore.get(input.taskBranchId);
+    const project = this.getProject(branch.projectId);
+    const metadata = this.toolRegistry.get("create_task_worktree");
+    const decision = this.approvalPolicyEngine.decide({ mode: this.stateStore.readSettings().permissionMode, actionType: "worktree_create", riskLevel: metadata?.riskLevel });
+    if (decision.requiresApproval && this.stateStore.readSettings().permissionMode !== "full_access") {
+      const approval = this.createApprovalRequest({
+        method: "create_task_worktree",
+        params: input,
+        projectId: branch.projectId,
+        taskId: branch.taskId,
+        taskBranchId: branch.id,
+        runId,
+        toolName: "create_task_worktree",
+        actionType: "worktree_create",
+        riskLevel: metadata?.riskLevel,
+        affectedFiles: branch.touchedFiles,
+        suggestedDecision: "inspect"
+      });
+      return { created: false, approvalRequired: true, approvalId: approval.id, decision };
+    }
+    const created = this.taskWorktreeManager.createWorkspace(project, branch, input.isolationMode);
+    const updated = this.taskBranchStore.update(branch.id, (current) => {
+      current.isolationMode = created.isolationMode;
+      current.workspacePath = created.workspacePath;
+      current.gitBranchName = created.gitBranchName || current.gitBranchName;
+      current.worktreeCreatedAt = created.createdAt;
+      current.worktreeStatus = created.worktreeStatus;
+    });
+    if (runId) {
+      this.appendRunEvent({ runId, type: "tool.completed", message: created.message, data: created });
+    }
+    this.logStore.write({ level: created.worktreeStatus === "ready" ? "info" : "warn", source: "mcp", action: "create_task_worktree", message: created.message, requestId, projectId: project.id, taskId: branch.taskId, taskBranchId: branch.id, runId, details: created });
+    return { created: created.worktreeStatus === "ready", taskBranch: updated, worktree: created, approvalRequired: false };
+  }
+
+  getTaskWorktreeStatus(taskBranchId: string) {
+    const branch = this.taskBranchStore.get(taskBranchId);
+    const project = this.getProject(branch.projectId);
+    return this.taskWorktreeManager.status(project, branch);
+  }
+
+  cleanupTaskWorktree(input: { taskBranchId: string; confirm: boolean }, requestId?: string, runId?: string) {
+    if (!input.confirm) throw new Error("confirm must be true to cleanup a task workspace");
+    const branch = this.taskBranchStore.get(input.taskBranchId);
+    const project = this.getProject(branch.projectId);
+    const result = this.taskWorktreeManager.cleanup(project, branch);
+    const updated = this.taskBranchStore.update(branch.id, (current) => {
+      current.worktreeStatus = result.cleaned ? "cleaned_up" : current.worktreeStatus;
+      if (result.cleaned) current.workspacePath = undefined;
+    });
+    if (runId) {
+      this.appendRunEvent({ runId, type: "tool.completed", message: result.message, data: result });
+    }
+    this.logStore.write({ level: "warn", source: "mcp", action: "cleanup_task_worktree", message: result.message, requestId, projectId: project.id, taskId: branch.taskId, taskBranchId: branch.id, runId, details: result });
+    return { taskBranch: updated, result };
+  }
+
   proposeWebPatch(input: { projectId: string; taskId?: string; taskBranchId?: string; title: string; rationale?: string; changes: WebPatch["changes"] }, requestId?: string) {
     const project = this.getProject(input.projectId);
     const patch = this.patchEngine.create(project, input, requestId);
     if (input.taskBranchId) {
-      this.taskBranchStore.linkArtifact(input.taskBranchId, { id: patch.id, type: "patch", label: patch.title, filePaths: patch.changes.map((change) => change.filePath) });
+        this.taskBranchStore.linkArtifact(input.taskBranchId, { id: patch.id, type: "patch", label: patch.title, filePaths: patch.changes.map((change) => change.filePath) });
+      const branch = this.taskBranchStore.get(input.taskBranchId);
+      if (branch.activeRunId) {
+        this.appendRunEvent({ runId: branch.activeRunId, type: "patch.proposed", message: `Patch proposed: ${patch.title}`, data: { patchId: patch.id, touchedFiles: patch.touchedFiles } });
+      }
     }
     return patch;
   }
@@ -778,16 +1108,87 @@ export class BridgeService {
     return this.patchEngine.getPatchConflictStatus(project, patchId);
   }
 
-  requestApplyPatch(patchId: string, requestId?: string) {
+  preflightPatchApply(patchId: string, runId?: string) {
     const patch = this.patchEngine.get(patchId);
     const project = this.getProject(patch.projectId);
-    return this.patchEngine.requestApply(project, patchId, requestId);
+    const branch = patch.taskBranchId ? this.taskBranchStore.get(patch.taskBranchId) : undefined;
+    const targetProject = this.projectForBranchWorkspace(project, branch);
+    const preflightReport = this.patchEngine.preflightPatchApply(targetProject, patchId);
+    if (runId) {
+      this.appendRunEvent({ runId, type: "patch.preflight_checked", message: preflightReport.preflightSummary, data: preflightReport });
+      if (preflightReport.conflictDetected) {
+        this.appendRunEvent({ runId, type: "conflict.detected", message: "Patch preflight detected conflict or stale base.", data: preflightReport });
+      }
+    }
+    return preflightReport;
   }
 
-  requestRevertPatch(patchId: string, requestId?: string) {
+  requestApplyPatch(patchId: string, requestId?: string, runId?: string) {
     const patch = this.patchEngine.get(patchId);
     const project = this.getProject(patch.projectId);
-    return this.patchEngine.requestRevert(project, patchId, requestId);
+    const branch = patch.taskBranchId ? this.taskBranchStore.get(patch.taskBranchId) : undefined;
+    const targetProject = this.projectForBranchWorkspace(project, branch);
+    const result = this.patchEngine.requestApply(targetProject, patchId, requestId);
+    const preflightReport = (result as any).preflightReport || (result as any).conflictStatus;
+    if (runId && preflightReport) {
+      this.appendRunEvent({ runId, type: "patch.preflight_checked", message: preflightReport.preflightSummary || "Patch preflight checked.", data: preflightReport });
+      if (preflightReport.conflictDetected) {
+        this.appendRunEvent({ runId, type: "conflict.detected", message: "Patch conflict detected.", data: preflightReport });
+      }
+    }
+    if ((result as any).requiresApproval || (result as any).approvalRequired) {
+      const metadata = this.toolRegistry.get("request_apply_patch");
+      const approval = this.createApprovalRequest({
+        method: "request_apply_patch",
+        params: { patchId },
+        projectId: patch.projectId,
+        taskId: patch.taskId,
+        taskBranchId: patch.taskBranchId,
+        runId,
+        toolName: "request_apply_patch",
+        actionType: "patch_apply",
+        riskLevel: metadata?.riskLevel,
+        patchId: patch.id,
+        affectedFiles: patch.touchedFiles,
+        suggestedDecision: preflightReport?.conflictDetected ? "inspect" : "approve",
+        preflightReport
+      });
+      return { ...result, approvalRequired: true, approvalId: approval.id, preflightReport };
+    }
+    if (runId) {
+      this.appendRunEvent({ runId, type: "patch.applied", message: "Patch applied.", data: result });
+    }
+    return result;
+  }
+
+  requestRevertPatch(patchId: string, requestId?: string, runId?: string) {
+    const patch = this.patchEngine.get(patchId);
+    const project = this.getProject(patch.projectId);
+    const branch = patch.taskBranchId ? this.taskBranchStore.get(patch.taskBranchId) : undefined;
+    const targetProject = this.projectForBranchWorkspace(project, branch);
+    const result = this.patchEngine.requestRevert(targetProject, patchId, requestId);
+    if ((result as any).reverted === false || (result as any).requiresApproval) {
+      const metadata = this.toolRegistry.get("request_revert_patch");
+      const approval = this.createApprovalRequest({
+        method: "request_revert_patch",
+        params: { patchId },
+        projectId: patch.projectId,
+        taskId: patch.taskId,
+        taskBranchId: patch.taskBranchId,
+        runId,
+        toolName: "request_revert_patch",
+        actionType: "patch_revert",
+        riskLevel: metadata?.riskLevel,
+        patchId: patch.id,
+        affectedFiles: patch.touchedFiles,
+        suggestedDecision: "inspect"
+      });
+      return { ...result, approvalRequired: true, approvalId: approval.id };
+    }
+    if (runId) {
+      this.appendRunEvent({ runId, type: "patch.reverted", message: "Patch reverted.", data: result });
+    }
+    return result;
   }
 
   applyPatchFromDashboard(patchId: string, requestId?: string) {
@@ -858,10 +1259,11 @@ export class BridgeService {
     return this.stateStore.load().executionJobs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
-  async createExecutionJob(input: { taskId: string; taskBranchId?: string; executorMode?: ExecutorMode; executorPolicy?: ExecutorPolicy; externalExecutorId?: string; runImmediately?: boolean }, requestId?: string) {
+  async createExecutionJob(input: { taskId: string; taskBranchId?: string; executorMode?: ExecutorMode; executorPolicy?: ExecutorPolicy; externalExecutorId?: string; runImmediately?: boolean }, requestId?: string, incomingRunId?: string) {
     const task = this.taskStore.get(input.taskId);
     const project = this.getProject(task.projectId);
     const taskBranchId = input.taskBranchId || task.activeTaskBranchId;
+    const branch = taskBranchId ? this.taskBranchStore.get(taskBranchId) : undefined;
     const packet = this.buildPacket(task, project);
     const executorMode = input.executorMode || task.executorMode;
     const executorPolicy = input.executorPolicy || task.executorPolicy;
@@ -872,11 +1274,25 @@ export class BridgeService {
     const prompt = executorMode === "codex" || executorMode === "hybrid"
       ? this.codexExecutor.buildPrompt(task, project, packet.relevantContextSummary, packet.referencedRoles, packet.referencedSkills)
       : undefined;
+    const run = incomingRunId
+      ? this.runStore.update(incomingRunId, (current) => {
+          current.projectId = project.id;
+          current.taskId = task.id;
+          current.taskBranchId = taskBranchId;
+          current.executorMode = executorMode;
+          current.title = `Execution job: ${task.taskTitle}`;
+        })
+      : this.createRun({ title: `Execution job: ${task.taskTitle}`, projectId: project.id, taskId: task.id, taskBranchId, executorMode, toolName: "create_execution_job", requestId });
+    if (taskBranchId) {
+      this.taskBranchStore.linkRun(taskBranchId, run.id);
+    }
+    this.appendRunEvent({ runId: run.id, type: "executor.selected", message: `Executor selected: ${executorMode}`, data: { executorPolicy, branchIsolation: branch?.isolationMode } });
     const job: ExecutionJob = {
       id: nanoid(10),
       projectId: project.id,
       taskId: task.id,
       taskBranchId,
+      runId: run.id,
       title: `${task.taskTitle} (${executorMode})`,
       executorMode,
       executorPolicy,
@@ -906,12 +1322,32 @@ export class BridgeService {
       requestId,
       projectId: project.id,
       taskId: task.id,
+      taskBranchId,
+      runId: run.id,
       details: { jobId: job.id, executorMode, executorPolicy, requiresApproval }
     });
+    if (requiresApproval) {
+      const metadata = this.toolRegistry.get("create_execution_job");
+      const approval = this.createApprovalRequest({
+        method: "create_execution_job",
+        params: { jobId: job.id, taskId: task.id, taskBranchId, executorMode },
+        projectId: project.id,
+        taskId: task.id,
+        taskBranchId,
+        runId: run.id,
+        toolName: "create_execution_job",
+        actionType: executorMode === "external" ? "external_executor" : "patch_apply",
+        riskLevel: metadata?.riskLevel,
+        executionJobId: job.id,
+        affectedFiles: task.claimedFiles,
+        suggestedDecision: "inspect"
+      });
+      return { job, runId: run.id, approvalRequired: true, approvalId: approval.id };
+    }
     if (input.runImmediately && !requiresApproval) {
       return this.runExecutionJob(job.id, requestId);
     }
-    return { job };
+    return { job, runId: run.id, approvalRequired: false };
   }
 
   getExecutionJob(jobId: string) {
@@ -962,6 +1398,10 @@ export class BridgeService {
       target.updatedAt = now();
       target.events.push({ at: now(), type: "execution_started", message: `Executor ${target.executorMode} started.` });
     });
+    if (job.runId) {
+      this.runStore.start(job.runId);
+      this.appendRunEvent({ runId: job.runId, type: "executor.started", message: `Executor ${job.executorMode} started.`, data: { jobId } });
+    }
     const result = task.uiScreenshotRequest
       ? await this.uiScreenshotRunner.run(job, task, project, requestId)
       : await executor.run(job, task, project);
@@ -991,8 +1431,25 @@ export class BridgeService {
         requestId,
         projectId: target.projectId,
         taskId: target.taskId,
+        taskBranchId: target.taskBranchId,
+        runId: target.runId,
         details: { jobId: target.id, exitCode: target.exitCode }
       });
+      if (target.runId) {
+        this.runStore.setStatus(target.runId, target.status === "completed" ? "completed" : target.status === "cancelled" ? "cancelled" : "failed");
+        this.eventStore.append({
+          runId: target.runId,
+          type: target.status === "completed" ? "executor.completed" : "executor.failed",
+          projectId: target.projectId,
+          taskId: target.taskId,
+          taskBranchId: target.taskBranchId,
+          executorMode: target.executorMode,
+          toolName: "create_execution_job",
+          requestId,
+          message: `Executor ${target.executorMode} finished with ${target.status}.`,
+          data: { jobId: target.id, exitCode: target.exitCode }
+        });
+      }
       return { job: target };
     });
     if (updated.job.taskId && Array.isArray(result.artifacts)) {
@@ -1015,27 +1472,58 @@ export class BridgeService {
     });
   }
 
-  async runShellCommand(input: { projectId: string; taskId?: string; taskBranchId?: string; command: string; cwd?: string; timeoutMs?: number; shell?: "powershell" | "cmd" | "bash"; runImmediately?: boolean }, requestId?: string) {
+  async runShellCommand(input: { projectId: string; taskId?: string; taskBranchId?: string; command: string; cwd?: string; timeoutMs?: number; shell?: "powershell" | "cmd" | "bash"; runImmediately?: boolean }, requestId?: string, incomingRunId?: string) {
     const project = this.getProject(input.projectId);
-    const command = this.shellRunner.create(project, input, requestId);
+    const branch = input.taskBranchId ? this.taskBranchStore.get(input.taskBranchId) : undefined;
+    const targetProject = this.projectForBranchWorkspace(project, branch);
+    const run = incomingRunId
+      ? this.runStore.update(incomingRunId, (current) => {
+          current.projectId = project.id;
+          current.taskId = input.taskId;
+          current.taskBranchId = input.taskBranchId;
+          current.title = `Shell command: ${input.command.slice(0, 80)}`;
+        })
+      : this.createRun({ title: `Shell command: ${input.command.slice(0, 80)}`, projectId: project.id, taskId: input.taskId, taskBranchId: input.taskBranchId, toolName: "run_shell_command", requestId });
+    const command = this.shellRunner.create(targetProject, { ...input, runId: run.id }, requestId);
     if (input.taskId) {
       this.taskStore.linkArtifact(input.taskId, { id: command.id, type: "shell_command", label: command.command });
     }
     if (input.taskBranchId) {
       this.taskBranchStore.linkArtifact(input.taskBranchId, { id: command.id, type: "shell_command", label: command.command });
     }
-    if (input.runImmediately && !command.requiresApproval) {
-      const result = await this.shellRunner.run(command.id, requestId);
-      return { command: result };
+    if (command.requiresApproval) {
+      const metadata = this.toolRegistry.get("run_shell_command");
+      const approval = this.createApprovalRequest({
+        method: "run_shell_command",
+        params: { commandId: command.id, command: command.command },
+        projectId: project.id,
+        taskId: input.taskId,
+        taskBranchId: input.taskBranchId,
+        runId: run.id,
+        toolName: "run_shell_command",
+        actionType: command.classification === "read_only" ? "shell_readonly" : "shell_write",
+        riskLevel: metadata?.riskLevel,
+        shellCommandId: command.id,
+        command: command.command,
+        suggestedDecision: command.classification === "dangerous" ? "reject" : "inspect"
+      });
+      return { command, runId: run.id, approvalRequired: true, approvalId: approval.id };
     }
-    return { command };
+    if (input.runImmediately && !command.requiresApproval) {
+      this.appendRunEvent({ runId: run.id, type: "shell.started", message: "Shell command started.", data: { commandId: command.id } });
+      const result = await this.shellRunner.run(command.id, requestId);
+      this.runStore.setStatus(run.id, result.status === "completed" ? "completed" : "failed");
+      this.appendRunEvent({ runId: run.id, type: result.status === "completed" ? "shell.completed" : "shell.failed", message: `Shell command ${result.status}.`, data: { commandId: result.id, exitCode: result.exitCode } });
+      return { command: result, runId: run.id, approvalRequired: false };
+    }
+    return { command, runId: run.id, approvalRequired: false };
   }
 
   approveShellCommand(commandId: string) {
     return this.shellRunner.approve(commandId);
   }
 
-  async getLatestLogs(input: { level?: "debug" | "info" | "warn" | "error"; requestId?: string; limit?: number; projectId?: string; taskId?: string }) {
+  async getLatestLogs(input: { level?: "debug" | "info" | "warn" | "error"; requestId?: string; limit?: number; projectId?: string; taskId?: string; taskBranchId?: string; runId?: string }) {
     return this.logStore.list(input);
   }
 
@@ -1111,6 +1599,7 @@ export class BridgeService {
   getApprovals() {
     const state = this.stateStore.load();
     return {
+      approvalRequests: state.approvalRequests.filter((approval) => approval.status === "pending"),
       executionJobs: state.executionJobs.filter((job) => job.status === "needs_approval"),
       shellCommands: state.shellCommands.filter((command) => command.status === "needs_approval"),
       repairs: state.repairProposals.filter((repair) => repair.status === "needs_approval"),
@@ -1236,10 +1725,10 @@ export class BridgeService {
       defaultExecutorMode: "webagent",
       defaultExecutorPolicy: "save_codex_quota",
       modes: [
-        { id: "webagent", summary: "Default. ChatGPT Web drives local MCP tools without consuming Codex quota." },
-        { id: "codex", summary: "Full native Codex executor for multi-file implementation, testing, and repair work." },
-        { id: "hybrid", summary: "WebAgent plans or drafts; Codex validates, tests, and resolves integration issues." },
-        { id: "external", summary: "Stub preview for third-party CLI coding agents. Configuration lives in bridge/config/external-executors.json." }
+        { ...this.webAgentExecutor.descriptor, summary: this.webAgentExecutor.descriptor.description },
+        { ...this.codexExecutor.descriptor, summary: this.codexExecutor.descriptor.description },
+        { ...this.hybridExecutor.descriptor, summary: this.hybridExecutor.descriptor.description },
+        { ...this.externalExecutor.descriptor, summary: this.externalExecutor.descriptor.description }
       ],
       policies: [
         { id: "save_codex_quota", summary: "Prefer WebAgent when the task is small enough." },

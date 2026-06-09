@@ -37,10 +37,10 @@ export class ContextCollector {
     ensureDir(CONTEXT_PACKS_DIR);
     const budget = options.budget || "small";
     const budgetConfig = budget === "large"
-      ? { treeEntries: 140, ruleItems: 8, skillItems: 8, roleItems: 8, summaryChars: 380, gitStatusChars: 3200, gitDiffChars: 20_000 }
+      ? { treeEntries: 140, ruleItems: 8, skillItems: 8, roleItems: 8, summaryChars: 380, gitStatusChars: 3200, gitDiffChars: 20_000, maxFiles: 12, maxSnippets: 12, maxCharsPerSnippet: 460, maxTotalChars: 30_000 }
       : budget === "medium"
-        ? { treeEntries: 80, ruleItems: 6, skillItems: 6, roleItems: 6, summaryChars: 260, gitStatusChars: 1800, gitDiffChars: 12_000 }
-        : { treeEntries: 0, ruleItems: 4, skillItems: 4, roleItems: 4, summaryChars: 180, gitStatusChars: 900, gitDiffChars: 6_000 };
+        ? { treeEntries: 80, ruleItems: 6, skillItems: 6, roleItems: 6, summaryChars: 260, gitStatusChars: 1800, gitDiffChars: 12_000, maxFiles: 8, maxSnippets: 8, maxCharsPerSnippet: 340, maxTotalChars: 18_000 }
+        : { treeEntries: 0, ruleItems: 4, skillItems: 4, roleItems: 4, summaryChars: 180, gitStatusChars: 900, gitDiffChars: 6_000, maxFiles: 5, maxSnippets: 5, maxCharsPerSnippet: 260, maxTotalChars: 10_000 };
     const paths = uniqueStrings((options.paths || []).slice(0, MAX_CONTEXT_FILES));
     const files = paths.map((filePath) => readProjectFile(project, filePath));
     const instructions = this.instructionLoader.load(project.path, paths);
@@ -133,6 +133,7 @@ export class ContextCollector {
     }
     if (options.retrievedContext && !options.explicitFullRead) {
       lines.push("## Retrieved Context");
+      lines.push("This section is the default context source. Full file excerpts are omitted unless explicitFullRead=true.");
       lines.push(`Provider: ${options.retrievedContext.provider}`);
       lines.push(`Summary: ${options.retrievedContext.conciseSummary}`);
       if (options.retrievedContext.retrievalWarnings.length) {
@@ -188,6 +189,11 @@ export class ContextCollector {
         snippetFiles: options.retrievedContext?.relevantFileDetails.length || 0,
         truncatedFiles: options.explicitFullRead ? 0 : files.filter((file) => file.content.length > 12_000).length,
         treeEntries: Math.min(tree.length, budgetConfig.treeEntries),
+        maxFiles: budgetConfig.maxFiles,
+        maxSnippets: budgetConfig.maxSnippets,
+        maxCharsPerSnippet: budgetConfig.maxCharsPerSnippet,
+        maxTotalChars: budgetConfig.maxTotalChars,
+        includeFullFiles: Boolean(options.explicitFullRead),
         includesGitStatus: Boolean(gitStatus),
         includesDiff: Boolean(gitDiff),
         ruleFiles: instructions.length,

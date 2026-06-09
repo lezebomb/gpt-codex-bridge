@@ -404,6 +404,27 @@ button {
   gap: 12px;
 }
 
+.timeline {
+  display: grid;
+  gap: 8px;
+}
+
+.timeline-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fffaf2;
+}
+
+.timeline-copy p {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
 .item {
   border: 1px solid var(--line);
   border-radius: 16px;

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { EXTERNAL_EXECUTOR_CONFIG_FILE } from "../config.js";
 import { readJsonFile, writeJsonFile } from "../lib/common.js";
 import { ExecutionJob, ExternalExecutorConfig, Project, TaskRecord } from "../types.js";
+import { AgentExecutor } from "./executor-contract.js";
 
 const DEFAULT_EXTERNAL_EXECUTORS: ExternalExecutorConfig[] = [
   {
@@ -37,12 +38,28 @@ const DEFAULT_EXTERNAL_EXECUTORS: ExternalExecutorConfig[] = [
   }
 ];
 
-export class ExternalExecutor {
+export class ExternalExecutor implements AgentExecutor {
+  readonly descriptor = {
+    id: "external" as const,
+    name: "External",
+    description: "Configurable external CLI executor preview. No provider is hardcoded into Bridge runtime behavior.",
+    capabilities: { canReadFiles: true, canWriteFiles: true, canRunShell: true, canUseMcp: false, canUseNetwork: true, canUseGit: true, canRunTests: true, canUseExternalModel: true },
+    riskLevel: "critical" as const,
+    supportsCancel: false,
+    supportsDryRun: true,
+    supportsStreaming: false,
+    supportsWorkspaceIsolation: true
+  };
+
   list(): ExternalExecutorConfig[] {
     if (!fs.existsSync(EXTERNAL_EXECUTOR_CONFIG_FILE)) {
       writeJsonFile(EXTERNAL_EXECUTOR_CONFIG_FILE, DEFAULT_EXTERNAL_EXECUTORS);
     }
     return readJsonFile(EXTERNAL_EXECUTOR_CONFIG_FILE, DEFAULT_EXTERNAL_EXECUTORS);
+  }
+
+  cancel(runId: string) {
+    return { cancelled: false, reason: `External executor run ${runId} is currently a dry-run preview; no child process is tracked to cancel.` };
   }
 
   async run(job: ExecutionJob, task: TaskRecord, project: Project): Promise<Partial<ExecutionJob>> {

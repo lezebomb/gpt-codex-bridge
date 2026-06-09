@@ -26,13 +26,15 @@ export class LogStore {
       requestId: entry.requestId,
       projectId: entry.projectId,
       taskId: entry.taskId,
+      taskBranchId: entry.taskBranchId,
+      runId: entry.runId,
       details: compactForLog(entry.details, 5000)
     };
     fs.appendFileSync(this.fileForDate(), `${JSON.stringify(full)}\n`, "utf8");
     return full;
   }
 
-  list(options?: { limit?: number; level?: LogEntry["level"]; requestId?: string; projectId?: string; taskId?: string }): LogEntry[] {
+  list(options?: { limit?: number; level?: LogEntry["level"]; requestId?: string; projectId?: string; taskId?: string; taskBranchId?: string; runId?: string }): LogEntry[] {
     const limit = options?.limit ?? 100;
     if (!fs.existsSync(LOGS_DIR)) {
       return [];
@@ -54,6 +56,12 @@ export class LogStore {
             continue;
           }
           if (options?.taskId && entry.taskId !== options.taskId) {
+            continue;
+          }
+          if (options?.taskBranchId && entry.taskBranchId !== options.taskBranchId) {
+            continue;
+          }
+          if (options?.runId && entry.runId !== options.runId) {
             continue;
           }
           out.push(entry);

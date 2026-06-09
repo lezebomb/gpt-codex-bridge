@@ -149,12 +149,13 @@ const state = {
   browse: { currentPath: "", roots: [], directories: [], parentPath: null },
   tasks: [],
   taskBranches: [],
+  runs: [],
   taskDetail: null,
   patches: [],
   executionJobs: [],
   approvals: null,
   logs: [],
-  logFilters: { requestId: "" },
+  logFilters: { requestId: "", runId: "", taskBranchId: "" },
   mcpCenter: null,
   executors: null,
   diagnostics: null,
@@ -229,7 +230,7 @@ async function refreshCore() {
     state.projectId = state.projects[0].id;
     localStorage.setItem(STORAGE.projectId, state.projectId);
   }
-  await Promise.all([loadTasks(), loadTaskBranches(), loadPatches(), loadExecutionJobs(), loadBrowse()]);
+  await Promise.all([loadTasks(), loadTaskBranches(), loadRuns(), loadPatches(), loadExecutionJobs(), loadBrowse()]);
   if (state.projectId) {
     await Promise.all([loadProjectInspect(state.projectId), loadProjectIndexStatus(state.projectId)]);
   }
@@ -290,9 +291,18 @@ async function loadExecutionJobs() {
   render();
 }
 
+async function loadRuns() {
+  const query = state.projectId ? `?projectId=${encodeURIComponent(state.projectId)}&limit=80` : "?limit=80";
+  const body = await api(`/runs${query}`);
+  state.runs = body.runs || [];
+  render();
+}
+
 async function loadLogs() {
   const params = new URLSearchParams({ limit: "80" });
   if (state.logFilters.requestId) params.set("requestId", state.logFilters.requestId.trim());
+  if (state.logFilters.runId) params.set("runId", state.logFilters.runId.trim());
+  if (state.logFilters.taskBranchId) params.set("taskBranchId", state.logFilters.taskBranchId.trim());
   const body = await api(`/logs?${params.toString()}`);
   state.logs = body.logs || [];
   render();
@@ -393,6 +403,25 @@ function getTaskBranches(taskId) {
   return state.taskBranches.filter((branch) => branch.taskId === taskId);
 }
 
+function getBranchRuns(taskBranchId) {
+  return state.runs.filter((run) => run.taskBranchId === taskBranchId).slice(0, 5);
+}
+
+function renderRunTimeline(taskBranchId) {
+  const runs = getBranchRuns(taskBranchId);
+  if (!runs.length) return `<div class="empty">No run timeline yet.</div>`;
+  return `<div class="timeline">${runs.map((run) => `
+    <div class="timeline-row">
+      <span class="pill-status ${escapeHtml(run.status)}">${escapeHtml(run.status)}</span>
+      <div class="timeline-copy">
+        <strong>${escapeHtml(run.title)}</strong>
+        <p>${escapeHtml(run.toolName || run.executorMode || "run")} · ${escapeHtml(formatDateTime(run.updatedAt))}</p>
+      </div>
+      ${["queued", "running", "waiting_for_approval", "waiting_for_user"].includes(run.status) ? `<button class="ghost-button" data-cancel-run="${escapeHtml(run.id)}">Cancel</button>` : `<button class="ghost-button" data-run-detail="${escapeHtml(run.id)}">Events</button>`}
+    </div>
+  `).join("")}</div>`;
+}
+
 function taskBranchOptions(taskId = "") {
   const branches = taskId ? getTaskBranches(taskId) : state.taskBranches;
   return branches.map((branch) => `<option value="${branch.id}">${escapeHtml(branch.branchName)} (${escapeHtml(branch.executorMode)})</option>`).join("");
@@ -412,15 +441,23 @@ function renderTaskBranches(task) {
       </header>
       <div class="stack">
         <span class="tag">executor: ${escapeHtml(branch.executorMode)}</span>
+        <span class="tag">isolation: ${escapeHtml(branch.isolationMode || "in_place")}</span>
+        <span class="tag">worktree: ${escapeHtml(branch.worktreeStatus || "not_created")}</span>
+        ${branch.workspacePath ? `<span class="tag">workspace: ${escapeHtml(branch.workspacePath)}</span>` : ""}
         <span class="tag">${branch.executorLocked ? "已锁定" : "可切换"}</span>
         ${task.activeTaskBranchId === branch.id ? `<span class="tag">当前活跃分支</span>` : ""}
         ${branch.touchedFiles.map((filePath) => `<span class="tag">${escapeHtml(filePath)}</span>`).join("")}
       </div>
       <p style="margin: 12px 0 0;">${escapeHtml(branch.executorDecisionReason || "")}</p>
+      <div style="margin-top: 12px;">
+        <h4>Run Timeline</h4>
+        ${renderRunTimeline(branch.id)}
+      </div>
       <div class="item-actions" style="margin-top: 12px;">
         ${task.activeTaskBranchId === branch.id ? "" : `<button class="secondary-button" data-set-active-branch="${branch.id}" data-task-id="${task.id}">设为活跃分支</button>`}
         <button class="ghost-button" data-continue-branch="${branch.id}">继续</button>
         <button class="ghost-button" data-branch-conflicts="${branch.id}">查看冲突</button>
+        <button class="ghost-button" data-worktree-status="${branch.id}">Isolation</button>
         <button class="ghost-button" data-branch-detail="${branch.id}">详情</button>
       </div>
     </div>
@@ -739,6 +776,8 @@ function pageLogs() {
     </section>
     <article class="card">
       <form id="logFilterForm" style="margin-bottom: 16px;">
+        <label>runId<input name="runId" value="${escapeHtml(state.logFilters.runId || "")}" placeholder="Filter by Agent Run" /></label>
+        <label>taskBranchId<input name="taskBranchId" value="${escapeHtml(state.logFilters.taskBranchId || "")}" placeholder="Filter by Task Branch" /></label>
         <label>requestId<input name="requestId" value="${escapeHtml(state.logFilters.requestId || "")}" placeholder="按 requestId 过滤失败请求" /></label>
         <div class="item-actions" style="margin-top: 12px;">
           <button class="secondary-button" type="submit">${t("loadLogs")}</button>
@@ -824,8 +863,18 @@ function pageMcp() {
         <div class="items">
           ${tools.length ? tools.map((tool) => `
             <div class="item">
-              <h4>${escapeHtml(tool.name)}</h4>
-              <p>${escapeHtml(tool.description)}</p>
+              <header>
+                <div>
+                  <h4>${escapeHtml(tool.name)}</h4>
+                  <p>${escapeHtml(tool.description)}</p>
+                </div>
+                <span class="pill-status ${escapeHtml(tool.riskLevel || "low")}">${escapeHtml(tool.riskLevel || "low")}</span>
+              </header>
+              <div class="stack">
+                <span class="tag">category: ${escapeHtml(tool.category || "")}</span>
+                <span class="tag">sideEffects: ${escapeHtml((tool.sideEffects || []).join(", "))}</span>
+                <span class="tag">approval: ${tool.requiresApproval ? "yes" : "no"}</span>
+              </div>
             </div>
           `).join("") : `<div class="empty">${t("noData")}</div>`}
         </div>
@@ -1210,6 +1259,40 @@ function bindView() {
     });
   });
 
+  document.querySelectorAll("[data-worktree-status]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        state.taskDetail = await api(`/task-branches/${button.getAttribute("data-worktree-status")}/worktree`);
+        render();
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-run-detail]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        state.taskDetail = await api(`/runs/${button.getAttribute("data-run-detail")}`);
+        render();
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-cancel-run]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        await api(`/runs/${button.getAttribute("data-cancel-run")}/cancel`, { method: "POST", body: { reason: "Cancelled from Dashboard" } });
+        await Promise.all([loadRuns(), loadExecutionJobs(), loadTasks(), loadTaskBranches()]);
+        setAlert("success", "Run cancelled");
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  });
+
   document.querySelectorAll("[data-task-detail]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
@@ -1368,6 +1451,8 @@ function bindView() {
   document.querySelector("[data-action='load-logs']")?.addEventListener("click", () => loadLogs().catch(handleError));
   document.querySelector("[data-action='clear-log-filter']")?.addEventListener("click", async () => {
     state.logFilters.requestId = "";
+    state.logFilters.runId = "";
+    state.logFilters.taskBranchId = "";
     await loadLogs();
   });
   document.querySelector("[data-action='load-bundle']")?.addEventListener("click", () => loadDiagnostics().catch(handleError));
@@ -1380,6 +1465,8 @@ function bindView() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     state.logFilters.requestId = String(form.get("requestId") || "").trim();
+    state.logFilters.runId = String(form.get("runId") || "").trim();
+    state.logFilters.taskBranchId = String(form.get("taskBranchId") || "").trim();
     await loadLogs();
   });
 

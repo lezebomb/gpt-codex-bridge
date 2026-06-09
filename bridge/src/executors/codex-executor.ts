@@ -8,14 +8,31 @@ import { ApprovalEngine } from "../runtime/webagent/approval-engine.js";
 import { LogStore } from "../runtime/log-store.js";
 import { RuntimeStore } from "../runtime/runtime-store.js";
 import { StateStore } from "../runtime/state-store.js";
+import { AgentExecutor } from "./executor-contract.js";
 
-export class CodexExecutor {
+export class CodexExecutor implements AgentExecutor {
+  readonly descriptor = {
+    id: "codex" as const,
+    name: "Codex",
+    description: "Native Codex executor for multi-file implementation, tests, and repair work.",
+    capabilities: { canReadFiles: true, canWriteFiles: true, canRunShell: true, canUseMcp: true, canUseNetwork: false, canUseGit: true, canRunTests: true, canUseExternalModel: true },
+    riskLevel: "high" as const,
+    supportsCancel: true,
+    supportsDryRun: true,
+    supportsStreaming: true,
+    supportsWorkspaceIsolation: true
+  };
+
   constructor(
     private readonly runtimeStore: RuntimeStore,
     private readonly stateStore: StateStore,
     private readonly approvalEngine: ApprovalEngine,
     private readonly logStore: LogStore
   ) {}
+
+  cancel(runId: string) {
+    return { cancelled: false, reason: `Codex run ${runId} cancellation is recorded by Bridge. Live process interruption is not yet tracked across run ids.` };
+  }
 
   buildPrompt(task: TaskRecord, project: Project, packetSummary: string, roles: string[], skills: string[]): string {
     const roleBlock = roles.length ? roles.map((role) => `- ${role}`).join("\n") : "- fullstack_engineer";

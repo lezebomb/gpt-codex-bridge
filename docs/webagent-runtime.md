@@ -1,21 +1,18 @@
 # WebAgent Runtime
 
-`bridge/src/runtime/webagent/` 负责本地运行时组件。
+WebAgent = ChatGPT 网页端 GPT 驱动的本地 coding runtime。
 
-当前包含：
+Bridge 不在本地调用模型。Bridge 提供本地执行层：项目 allowlist、context index、retrieve_context、patch draft、preflight、approval queue、shell guard、EventStore、LogStore、Executor Router。
 
-- `ContextCollector`
-- `InstructionLoader`
-- `SkillLoader`
-- `PatchEngine`
-- `DiffManager`
-- `ApprovalEngine`
-- `ShellRunner`
-- `TaskStore`
-- `LogStore`
+## 推荐流程
 
-## 设计原则
+1. `list_projects` / `list_tasks` / `list_task_branches`
+2. `get_task_branch`
+3. `continue_task_branch`
+4. `retrieve_context`
+5. `propose_web_patch`
+6. `preflight_patch_apply`
+7. `request_apply_patch`
 
-- 不把全部项目上下文一次性塞进提示
-- 先摘要，再按需深读
-- 任务、补丁、日志和执行器状态全部落到本地状态文件
+每个网页端对话都绑定一个 `taskBranchId`。不要依赖网页端聊天记忆恢复项目状态。
+

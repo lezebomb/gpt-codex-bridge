@@ -195,9 +195,35 @@ app.get("/logs", async (req, res) => {
     requestId: z.string().optional(),
     projectId: z.string().optional(),
     taskId: z.string().optional(),
+    taskBranchId: z.string().optional(),
+    runId: z.string().optional(),
     limit: z.coerce.number().int().min(1).max(500).default(100)
   }).parse(req.query || {});
   res.json({ logs: await service.getLatestLogs(query) });
+});
+
+app.get("/runs", (req, res) => {
+  const query = z.object({
+    projectId: z.string().optional(),
+    taskId: z.string().optional(),
+    taskBranchId: z.string().optional(),
+    status: z.enum(["queued", "running", "waiting_for_approval", "waiting_for_user", "completed", "failed", "cancelled"]).optional(),
+    limit: z.coerce.number().int().min(1).max(500).default(100)
+  }).parse(req.query || {});
+  res.json({ runs: service.listRuns(query) });
+});
+
+app.get("/runs/:id", (req, res) => {
+  res.json(service.getRun(req.params.id));
+});
+
+app.get("/runs/:id/events", (req, res) => {
+  res.json({ events: service.getRunEvents({ runId: req.params.id }) });
+});
+
+app.post("/runs/:id/cancel", (req, res) => {
+  const body = z.object({ reason: z.string().optional() }).parse(req.body || {});
+  res.json(service.cancelRun({ runId: req.params.id, reason: body.reason }));
 });
 
 app.get("/errors/latest", (req, res) => {
@@ -227,8 +253,18 @@ app.get("/mcp-center", (_req, res) => {
   res.json({
     server: { endpoint: "/mcp", transport: "streamable-http", auth: "local-pairing-code" },
     summary: service.getPluginSummary(),
-    tools: service.getMcpToolCatalog()
+    tools: service.getMcpToolCatalog(),
+    policy: service.getToolPolicy()
   });
+});
+
+app.get("/mcp-center/tools", (req, res) => {
+  const query = z.object({ category: z.enum(["setup", "project", "context", "task", "taskBranch", "patch", "shell", "executor", "logs", "repair", "ui", "review", "admin"]).optional() }).parse(req.query || {});
+  res.json(service.getToolRegistry(query));
+});
+
+app.get("/mcp-center/tools/:name/risk", (req, res) => {
+  res.json(service.explainToolRisk({ toolName: req.params.name }));
 });
 
 app.post("/mcp-center/plugins/:id/enable", (req, res) => {
@@ -409,6 +445,24 @@ app.get("/task-branches/:id/conflicts", (req, res) => {
   res.json({ conflicts: service.detectBranchConflicts({ taskBranchId: req.params.id }) });
 });
 
+app.get("/task-branches/:id/isolation/recommend", (req, res) => {
+  res.json({ recommendation: service.recommendIsolationMode({ taskBranchId: req.params.id }) });
+});
+
+app.post("/task-branches/:id/worktree", (req, res) => {
+  const body = z.object({ isolationMode: z.enum(["in_place", "git_worktree", "copy_workspace"]).optional() }).parse(req.body || {});
+  res.status(201).json(service.createTaskWorktree({ taskBranchId: req.params.id, isolationMode: body.isolationMode }, (req as Request & { requestId?: string }).requestId));
+});
+
+app.get("/task-branches/:id/worktree", (req, res) => {
+  res.json({ status: service.getTaskWorktreeStatus(req.params.id) });
+});
+
+app.post("/task-branches/:id/worktree/cleanup", (req, res) => {
+  const body = z.object({ confirm: z.boolean().default(false) }).parse(req.body || {});
+  res.json(service.cleanupTaskWorktree({ taskBranchId: req.params.id, confirm: body.confirm }, (req as Request & { requestId?: string }).requestId));
+});
+
 app.get("/execution-jobs", (_req, res) => {
   res.json({ jobs: service.listExecutionJobs() });
 });
@@ -464,6 +518,10 @@ app.get("/web-patches/:id/diff", (req, res) => {
 
 app.get("/web-patches/:id/conflict-status", (req, res) => {
   res.json({ conflictStatus: service.getPatchConflictStatus(req.params.id) });
+});
+
+app.get("/web-patches/:id/preflight", (req, res) => {
+  res.json({ preflightReport: service.preflightPatchApply(req.params.id) });
 });
 
 app.post("/web-patches/:id/apply", (req, res) => {

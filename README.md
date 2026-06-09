@@ -1,45 +1,29 @@
 # ChatGPT Web-first Local Bridge
 
-这是一个 ChatGPT Web-first 的本地编程代理桥接器。
+`gpt-codex-bridge` 是 ChatGPT 网页端主控 GPT 的本地 coding runtime 治理层。
 
-主界面不是这个仓库里的 Dashboard，也不是 VS Code 插件。主工作台是 ChatGPT 网页端里的主控 GPT。`bridge/` 负责本地工具层，包括：
-
-- 注册和检查本地项目
-- 生成上下文包、补丁草稿、diff、apply/revert
-- 维护 `projectId` / `taskId` / `taskBranchId` / `execution job`
-- 路由到 `WebAgent` / `Codex` / `Hybrid` / `External`
-- 统一日志、审批、Repair Center、MCP Plugin Center
-
-默认 Executor 是 `WebAgent`，目标是节省 Codex 额度。`Codex` 保留为完整原生执行器，`Hybrid` 用于草稿加验证，`External` 当前只提供 dry-run/stub 预留。
-
-## Node 版本要求
-
-- 当前项目要求 `Node.js >= 24`
-- 推荐直接安装 Node.js 最新稳定版
-- 因为项目使用了 `node:sqlite`，旧版本 Node 可能无法运行
-- 启动前先执行 `node -v`
-- Windows 用户默认使用 Windows PowerShell
-
-## 使用路径
-
-1. 本地启动 Bridge
-2. 用 Cloudflare Tunnel 暴露 `http://localhost:8787`
-3. 在 ChatGPT 自定义 MCP 中填入 `https://your-domain/mcp`
-4. 使用 `本地配对码 / Local pairing code`
-5. 在 ChatGPT 网页端里围绕 `projectId` / `taskId` / `taskBranchId` 完成工作
-
-## 架构
+主线架构：
 
 ```text
-ChatGPT 主控 GPT
-  -> Custom MCP connector
-  -> Bridge MCP Server (/mcp)
-  -> Executor Router
-     -> WebAgent Executor
-     -> Codex Executor
-     -> Hybrid Executor
-     -> External Executor
+ChatGPT 网页端主控 GPT
+  -> Custom MCP
+  -> Local Bridge
+  -> WebAgent / Codex / Hybrid / External
 ```
+
+Bridge 提供本地执行层，不在本地调用模型。默认 Executor 是 `WebAgent`，也就是由 ChatGPT 网页端 GPT 通过 MCP 驱动本地项目检索、patch、审批和执行流程。
+
+## 核心能力
+
+- 项目 allowlist、文件读取、context index、`retrieve_context`
+- Task / Task Branch 多对话管理
+- Run/Event 时间线和 LogStore 审计日志
+- Tool Registry 风险治理
+- Patch preflight、安全报告、apply/revert backup
+- Approval Policy: `read_only` / `manual_review` / `auto_review` / `full_access`
+- 可选 `git_worktree` / `copy_workspace` 隔离模式
+- WebAgent / Codex / Hybrid / External Executor Router
+- Windows PowerShell 优先
 
 ## 快速启动
 
@@ -55,33 +39,34 @@ npm.cmd run dev
 http://localhost:8787/dashboard/
 ```
 
-然后查看：
+ChatGPT Custom MCP 使用：
 
-- [Quickstart](./QUICKSTART.md)
-- [Windows 快速启动](./docs/windows-quickstart.md)
-- [ChatGPT 自定义 MCP 设置](./docs/chatgpt-custom-mcp-setup.md)
-- [MCP tools 参考](./docs/mcp-tools-reference.md)
+```text
+https://your-domain/mcp
+```
 
-## 常用命令
+认证方式选择 Local pairing code，并从 Dashboard Setup 页复制本地 pairing code。
+
+## 常用测试
 
 ```powershell
-npm.cmd install
 npm.cmd run build
 npm.cmd run check
-npm.cmd run smoke
+npm.cmd run test:events
+npm.cmd run test:tool-registry
+npm.cmd run test:patch-preflight
 npm.cmd run mcp:smoke
 ```
 
-## 目录
+## 文档
 
-```text
-bridge/
-  config/external-executors.json
-  public/
-  scripts/
-  src/
-docs/
-gpts/project-orchestrator/
-examples/demo-project/
-roles/
-```
+- [Runtime Events](./docs/runtime-events.md)
+- [Tool Registry](./docs/tool-registry.md)
+- [Task Branch Isolation](./docs/task-branch-isolation.md)
+- [Patch Safety](./docs/patch-safety.md)
+- [Executors](./docs/executors.md)
+- [WebAgent Runtime](./docs/webagent-runtime.md)
+- [Security Model](./docs/security-model.md)
+- [Context Retrieval](./docs/context-retrieval.md)
+- [Quickstart](./QUICKSTART.md)
+

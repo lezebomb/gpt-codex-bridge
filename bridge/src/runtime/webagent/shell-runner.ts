@@ -41,7 +41,7 @@ export class ShellRunner {
     return record;
   }
 
-  create(project: Project, input: { taskId?: string; taskBranchId?: string; command: string; cwd?: string; timeoutMs?: number; shell?: "powershell" | "cmd" | "bash" }, requestId?: string): ShellCommandRecord {
+  create(project: Project, input: { taskId?: string; taskBranchId?: string; runId?: string; command: string; cwd?: string; timeoutMs?: number; shell?: "powershell" | "cmd" | "bash" }, requestId?: string): ShellCommandRecord {
     const cwd = input.cwd ? path.resolve(project.path, input.cwd) : project.path;
     if (cwd !== project.path && !cwd.startsWith(project.path + path.sep)) {
       throw new Error("cwd escapes project root");
@@ -51,6 +51,7 @@ export class ShellRunner {
       projectId: project.id,
       taskId: input.taskId,
       taskBranchId: input.taskBranchId,
+      runId: input.runId,
       command: input.command,
       cwd,
       timeoutMs: Math.max(1000, Math.min(10 * 60 * 1000, Number(input.timeoutMs || 60_000))),
@@ -70,13 +71,15 @@ export class ShellRunner {
     this.logStore.write({
       level: record.classification === "dangerous" ? "warn" : "info",
       source: "mcp",
-      action: "run_shell_command",
-      message: record.requiresApproval ? "Shell command created and waiting for approval." : "Shell command created.",
-      requestId,
-      projectId: project.id,
-      taskId: input.taskId,
-      details: { commandId: record.id, command: input.command, classification: record.classification }
-    });
+        action: "run_shell_command",
+        message: record.requiresApproval ? "Shell command created and waiting for approval." : "Shell command created.",
+        requestId,
+        projectId: project.id,
+        taskId: input.taskId,
+        taskBranchId: input.taskBranchId,
+        runId: input.runId,
+        details: { commandId: record.id, command: input.command, classification: record.classification }
+      });
     return record;
   }
 
@@ -145,6 +148,8 @@ export class ShellRunner {
         requestId,
         projectId: current.projectId,
         taskId: current.taskId,
+        taskBranchId: current.taskBranchId,
+        runId: current.runId,
         details: { commandId: current.id, exitCode: result.exitCode }
       });
       return current;

@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { nanoid } from "nanoid";
 
 import { compactForLog, normalizePathSlashes, now, sha256Text } from "../../lib/common.js";
-import { PatchConflictStatus, Project, TaskConflict, WebPatch, WebPatchChange } from "../../types.js";
+import { PatchConflictStatus, PatchPreflightReport, Project, TaskConflict, WebPatch, WebPatchChange } from "../../types.js";
 import { readJsonFile, writeJsonFile } from "../../lib/common.js";
 import { resolveProjectFile, validatePatchChanges } from "../../project-files.js";
 import { LogStore } from "../log-store.js";
@@ -168,13 +168,45 @@ export class PatchEngine {
     };
   }
 
+  preflightPatchApply(project: Project, patchOrId: string | WebPatch): PatchPreflightReport {
+    const patch = typeof patchOrId === "string" ? this.get(patchOrId) : patchOrId;
+    const conflictStatus = this.getPatchConflictStatus(project, patch);
+    const branchConflict = conflictStatus.conflictingBranches.length > 0;
+    const patchWouldOverwriteChanges = conflictStatus.changedFiles.length > 0;
+    const needsManualApproval = conflictStatus.requiresApproval || branchConflict || patchWouldOverwriteChanges || Boolean(conflictStatus.stalePatch);
+    const safeToApply = !needsManualApproval && patch.status === "needs_approval";
+    const suggestedIsolationMode = branchConflict || conflictStatus.stalePatch || patch.touchedFiles.length > 3 ? "git_worktree" : "in_place";
+    const preflightReport: PatchPreflightReport = {
+      ...conflictStatus,
+      safeToApply,
+      branchConflict,
+      patchWouldOverwriteChanges,
+      needsManualApproval,
+      suggestedIsolationMode,
+      checkedAt: now(),
+      preflightSummary: safeToApply
+        ? "Patch preflight passed. No stale file snapshots or active Task Branch overlaps were detected."
+        : `Patch preflight requires review: ${conflictStatus.blockingReasons.join(" | ") || "approval policy requires manual confirmation."}`
+    };
+    this.stateStore.update((state) => {
+      const current = state.webPatches.find((item) => item.id === patch.id);
+      if (current) {
+        current.lastConflictStatus = conflictStatus;
+        current.lastPreflightReport = preflightReport;
+        current.updatedAt = now();
+        current.events.push({ at: now(), type: "patch_preflight_checked", message: preflightReport.preflightSummary, data: preflightReport });
+      }
+    });
+    return preflightReport;
+  }
+
   apply(project: Project, patchId: string, source: "mcp" | "dashboard", requestId?: string) {
     const patch = this.get(patchId);
     if (patch.status !== "needs_approval") {
       throw new Error(`patch cannot be applied from status ${patch.status}`);
     }
     this.approvalEngine.assertMutationsAllowed("apply patch");
-    const conflictStatus = this.getPatchConflictStatus(project, patch);
+    const conflictStatus = this.preflightPatchApply(project, patch);
     const backupDir = this.backupDir(project, patch.id);
     fs.mkdirSync(backupDir, { recursive: true });
     const applied: Array<{ filePath: string; backupPath?: string; mode: string }> = [];
@@ -280,18 +312,19 @@ export class PatchEngine {
       throw new Error(`patch cannot be applied from status ${patch.status}`);
     }
     const settings = this.approvalEngine.currentSettings();
-    const conflictStatus = this.getPatchConflictStatus(project, patch);
+    const preflightReport = this.preflightPatchApply(project, patch);
     this.stateStore.update((state) => {
       const current = state.webPatches.find((item) => item.id === patch.id);
       if (current) {
-        current.lastConflictStatus = conflictStatus;
+        current.lastConflictStatus = preflightReport;
+        current.lastPreflightReport = preflightReport;
         current.updatedAt = now();
       }
     });
     if (settings.permissionMode === "read_only") {
-      return { applied: false, status: "blocked", reason: "read_only mode blocks file writes", patch, conflictDetected: conflictStatus.conflictDetected, stalePatch: conflictStatus.stalePatch, requiresApproval: true };
+      return { applied: false, status: "blocked", reason: "read_only mode blocks file writes", patch, safeToApply: false, preflightReport, conflictStatus: preflightReport, conflictDetected: preflightReport.conflictDetected, stalePatch: preflightReport.stalePatch, requiresApproval: true, approvalRequired: true };
     }
-    if (settings.permissionMode === "auto_review" && conflictStatus.conflictDetected) {
+    if (settings.permissionMode === "auto_review" && preflightReport.conflictDetected) {
       this.logStore.write({
         level: "warn",
         source: "mcp",
@@ -300,17 +333,20 @@ export class PatchEngine {
         requestId,
         projectId: project.id,
         taskId: patch.taskId,
-        details: { patchId: patch.id, conflictStatus }
+        details: { patchId: patch.id, preflightReport }
       });
       return {
         applied: false,
         status: "needs_dashboard_approval",
         reason: "Patch requires manual approval because it is stale or overlaps another active Task Branch.",
         patch,
-        conflictStatus,
+        safeToApply: false,
+        preflightReport,
+        conflictStatus: preflightReport,
         conflictDetected: true,
-        stalePatch: conflictStatus.stalePatch,
-        requiresApproval: true
+        stalePatch: preflightReport.stalePatch,
+        requiresApproval: true,
+        approvalRequired: true
       };
     }
     if (!this.approvalEngine.canAutoApplyPatch(patch.changes)) {
@@ -322,17 +358,20 @@ export class PatchEngine {
         requestId,
         projectId: project.id,
         taskId: patch.taskId,
-        details: { patchId: patch.id, conflictStatus }
+        details: { patchId: patch.id, preflightReport }
       });
       return {
         applied: false,
         status: "needs_dashboard_approval",
         reason: "Review and confirm the patch in Dashboard > Approvals or Tasks.",
         patch,
-        conflictStatus,
-        conflictDetected: conflictStatus.conflictDetected,
-        stalePatch: conflictStatus.stalePatch,
-        requiresApproval: true
+        safeToApply: preflightReport.safeToApply,
+        preflightReport,
+        conflictStatus: preflightReport,
+        conflictDetected: preflightReport.conflictDetected,
+        stalePatch: preflightReport.stalePatch,
+        requiresApproval: true,
+        approvalRequired: true
       };
     }
     const result = this.apply(project, patchId, "mcp", requestId);
@@ -341,9 +380,11 @@ export class PatchEngine {
       status: "applied",
       patch: this.get(patchId),
       result,
-      conflictStatus,
-      conflictDetected: conflictStatus.conflictDetected,
-      stalePatch: conflictStatus.stalePatch,
+      safeToApply: preflightReport.safeToApply,
+      preflightReport,
+      conflictStatus: preflightReport,
+      conflictDetected: preflightReport.conflictDetected,
+      stalePatch: preflightReport.stalePatch,
       requiresApproval: false
     };
   }

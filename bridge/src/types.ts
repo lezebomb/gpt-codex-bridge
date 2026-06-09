@@ -7,6 +7,27 @@ export const sandboxModeSchema = z.enum(["readOnly", "workspaceWrite", "dangerFu
 export const executorModeSchema = z.enum(["webagent", "codex", "hybrid", "external"]);
 export const executorPolicySchema = z.enum(["save_codex_quota", "best_result", "fast", "manual"]);
 export const contextPackBudgetSchema = z.enum(["small", "medium", "large"]);
+export const runStatusSchema = z.enum(["queued", "running", "waiting_for_approval", "waiting_for_user", "completed", "failed", "cancelled"]);
+export const toolRiskLevelSchema = z.enum(["low", "medium", "high", "critical"]);
+export const toolSideEffectSchema = z.enum(["none", "read", "write", "shell", "network", "git", "external"]);
+export const isolationModeSchema = z.enum(["in_place", "git_worktree", "copy_workspace"]);
+export const worktreeStatusSchema = z.enum(["not_created", "creating", "ready", "failed", "cleaned_up"]);
+export const approvalActionTypeSchema = z.enum([
+  "file_read",
+  "context_index",
+  "retrieve_context",
+  "patch_draft",
+  "patch_apply",
+  "patch_revert",
+  "shell_readonly",
+  "shell_write",
+  "dependency_install",
+  "git_write",
+  "network_access",
+  "external_executor",
+  "worktree_create",
+  "workspace_delete"
+]);
 export const taskStateSchema = z.enum([
   "draft",
   "created",
@@ -45,6 +66,12 @@ export type SandboxMode = z.infer<typeof sandboxModeSchema>;
 export type ExecutorMode = z.infer<typeof executorModeSchema>;
 export type ExecutorPolicy = z.infer<typeof executorPolicySchema>;
 export type ContextPackBudget = z.infer<typeof contextPackBudgetSchema>;
+export type RunStatus = z.infer<typeof runStatusSchema>;
+export type ToolRiskLevel = z.infer<typeof toolRiskLevelSchema>;
+export type ToolSideEffect = z.infer<typeof toolSideEffectSchema>;
+export type IsolationMode = z.infer<typeof isolationModeSchema>;
+export type WorktreeStatus = z.infer<typeof worktreeStatusSchema>;
+export type ApprovalActionType = z.infer<typeof approvalActionTypeSchema>;
 export type TaskState = z.infer<typeof taskStateSchema>;
 export type JobStatus = z.infer<typeof jobStatusSchema>;
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
@@ -79,6 +106,8 @@ export type LogEntry = {
   requestId?: string;
   projectId?: string;
   taskId?: string;
+  taskBranchId?: string;
+  runId?: string;
   details?: unknown;
 };
 
@@ -96,6 +125,80 @@ export type JobEvent = {
   type: string;
   message: string;
   data?: unknown;
+};
+
+export type RuntimeEventType =
+  | "run.created"
+  | "run.started"
+  | "tool.called"
+  | "tool.completed"
+  | "tool.failed"
+  | "context.indexed"
+  | "context.retrieved"
+  | "patch.proposed"
+  | "patch.preflight_checked"
+  | "patch.applied"
+  | "patch.reverted"
+  | "approval.required"
+  | "approval.granted"
+  | "approval.rejected"
+  | "shell.started"
+  | "shell.completed"
+  | "shell.failed"
+  | "executor.selected"
+  | "executor.started"
+  | "executor.completed"
+  | "executor.failed"
+  | "repair.proposed"
+  | "conflict.detected"
+  | "run.cancelled";
+
+export type AgentRun = {
+  id: string;
+  projectId?: string;
+  taskId?: string;
+  taskBranchId?: string;
+  executorMode?: ExecutorMode;
+  status: RunStatus;
+  title: string;
+  toolName?: string;
+  requestId?: string;
+  cancelReason?: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type RuntimeEvent = {
+  id: string;
+  runId: string;
+  type: RuntimeEventType;
+  timestamp: string;
+  projectId?: string;
+  taskId?: string;
+  taskBranchId?: string;
+  executorMode?: ExecutorMode;
+  toolName?: string;
+  requestId?: string;
+  message: string;
+  data?: unknown;
+};
+
+export type ToolMetadata = {
+  name: string;
+  category: "setup" | "project" | "context" | "task" | "taskBranch" | "patch" | "shell" | "executor" | "logs" | "repair" | "ui" | "review" | "admin";
+  description: string;
+  riskLevel: ToolRiskLevel;
+  sideEffects: ToolSideEffect[];
+  requiresApproval: boolean;
+  allowedPermissionModes: PermissionMode[];
+  recommendedExecutorModes: ExecutorMode[];
+  inputSummary: string;
+  outputSummary: string;
+  examples: string[];
+  disabledByDefault?: boolean;
 };
 
 export type TaskConflict = {
@@ -118,6 +221,11 @@ export type ContextPackSummary = {
   snippetFiles: number;
   truncatedFiles: number;
   treeEntries: number;
+  maxFiles?: number;
+  maxSnippets?: number;
+  maxCharsPerSnippet?: number;
+  maxTotalChars?: number;
+  includeFullFiles?: boolean;
   includesGitStatus: boolean;
   includesDiff: boolean;
   ruleFiles: number;
@@ -187,8 +295,15 @@ export type TaskBranchRecord = {
   executorDecisionReason: string;
   executorSwitchReason?: string;
   baseGitHead?: string;
+  currentGitHead?: string;
   gitBranchName?: string;
+  isolationMode: IsolationMode;
+  workspacePath?: string;
+  worktreeCreatedAt?: string;
+  worktreeStatus: WorktreeStatus;
   touchedFiles: string[];
+  activeRunId?: string;
+  runIds: string[];
   patchIds: string[];
   contextPackIds: string[];
   retrievedContextIds: string[];
@@ -212,6 +327,13 @@ export type RetrievedContextFileDetail = {
   summary: string;
   snippets: string[];
   exportedSymbols: string[];
+  detectedComponents?: string[];
+  functions?: string[];
+  classes?: string[];
+  imports?: string[];
+  routes?: string[];
+  testFiles?: string[];
+  relatedFiles?: string[];
   suggestedNextRead: string;
 };
 
@@ -283,6 +405,17 @@ export type PatchConflictStatus = {
   requiresApproval: boolean;
 };
 
+export type PatchPreflightReport = PatchConflictStatus & {
+  safeToApply: boolean;
+  branchConflict: boolean;
+  patchWouldOverwriteChanges: boolean;
+  needsManualApproval: boolean;
+  suggestedIsolationMode: IsolationMode;
+  workspacePath?: string;
+  checkedAt: string;
+  preflightSummary: string;
+};
+
 export type WebPatch = {
   id: string;
   projectId: string;
@@ -297,6 +430,7 @@ export type WebPatch = {
   fileSnapshots: PatchFileSnapshot[];
   conflicts: TaskConflict[];
   lastConflictStatus?: PatchConflictStatus;
+  lastPreflightReport?: PatchPreflightReport;
   createdBy: "chatgpt-web" | "user" | "bridge";
   appliedAt?: string;
   rejectedAt?: string;
@@ -316,11 +450,35 @@ export type ExecutorPacket = {
   referencedSkills: string[];
 };
 
+export type ExecutorCapabilities = {
+  canReadFiles: boolean;
+  canWriteFiles: boolean;
+  canRunShell: boolean;
+  canUseMcp: boolean;
+  canUseNetwork: boolean;
+  canUseGit: boolean;
+  canRunTests: boolean;
+  canUseExternalModel: boolean;
+};
+
+export type ExecutorDescriptor = {
+  id: ExecutorMode;
+  name: string;
+  description: string;
+  capabilities: ExecutorCapabilities;
+  riskLevel: ToolRiskLevel;
+  supportsCancel: boolean;
+  supportsDryRun: boolean;
+  supportsStreaming: boolean;
+  supportsWorkspaceIsolation: boolean;
+};
+
 export type ExecutionJob = {
   id: string;
   projectId: string;
   taskId?: string;
   taskBranchId?: string;
+  runId?: string;
   title: string;
   executorMode: ExecutorMode;
   executorPolicy: ExecutorPolicy;
@@ -349,6 +507,7 @@ export type ShellCommandRecord = {
   projectId: string;
   taskId?: string;
   taskBranchId?: string;
+  runId?: string;
   command: string;
   cwd: string;
   timeoutMs: number;
@@ -388,6 +547,20 @@ export type ReviewSession = {
 export type ApprovalRequest = {
   id: string;
   executionJobId?: string;
+  patchId?: string;
+  shellCommandId?: string;
+  repairProposalId?: string;
+  projectId?: string;
+  taskId?: string;
+  taskBranchId?: string;
+  runId?: string;
+  toolName?: string;
+  actionType?: ApprovalActionType;
+  riskLevel?: ToolRiskLevel;
+  affectedFiles?: string[];
+  command?: string;
+  suggestedDecision?: "approve" | "reject" | "inspect";
+  preflightReport?: PatchPreflightReport;
   method: string;
   params: unknown;
   status: "pending" | "approved" | "declined" | "expired";

@@ -18,17 +18,53 @@ function buildSnippet(content: string, query: string): string {
   return truncateText(content.slice(start, end).trim(), 240);
 }
 
-function detectSymbols(filePath: string, content: string): string[] {
-  const symbols = new Set<string>();
+function detectSymbolPack(filePath: string, content: string) {
+  const exportedSymbols = new Set<string>();
+  const functions = new Set<string>();
+  const classes = new Set<string>();
+  const imports = new Set<string>();
+  const detectedComponents = new Set<string>();
+  const routes = new Set<string>();
   for (const match of content.matchAll(/export\s+(?:async\s+)?(?:function|class|const|let)\s+([A-Za-z0-9_]+)/g)) {
-    symbols.add(match[1]);
+    exportedSymbols.add(match[1]);
+  }
+  for (const match of content.matchAll(/(?:async\s+)?function\s+([A-Za-z0-9_]+)\s*\(/g)) {
+    functions.add(match[1]);
+  }
+  for (const match of content.matchAll(/(?:const|let)\s+([A-Za-z0-9_]+)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>/g)) {
+    functions.add(match[1]);
+  }
+  for (const match of content.matchAll(/class\s+([A-Za-z0-9_]+)/g)) {
+    classes.add(match[1]);
+  }
+  for (const match of content.matchAll(/^\s*import\s+(?:type\s+)?(.+?)\s+from\s+["']([^"']+)["']/gm)) {
+    imports.add(`${match[1].replace(/\s+/g, " ").slice(0, 80)} from ${match[2]}`);
+  }
+  for (const match of content.matchAll(/^\s*from\s+([\w.]+)\s+import\s+(.+)$/gm)) {
+    imports.add(`${match[2].trim().slice(0, 80)} from ${match[1]}`);
   }
   if (/\.(tsx|jsx)$/.test(filePath)) {
-    for (const match of content.matchAll(/function\s+([A-Z][A-Za-z0-9_]*)\s*\(/g)) {
-      symbols.add(match[1]);
-    }
+    for (const match of content.matchAll(/(?:function|const)\s+([A-Z][A-Za-z0-9_]*)\b/g)) detectedComponents.add(match[1]);
+    for (const match of content.matchAll(/<Route\b[^>]*(?:path|to)=["']([^"']+)["']/g)) routes.add(match[1]);
   }
-  return Array.from(symbols).slice(0, 8);
+  if (/\.(py)$/.test(filePath)) {
+    for (const match of content.matchAll(/^\s*def\s+([A-Za-z0-9_]+)\s*\(/gm)) functions.add(match[1]);
+    for (const match of content.matchAll(/^\s*class\s+([A-Za-z0-9_]+)/gm)) classes.add(match[1]);
+    for (const match of content.matchAll(/@(app|router)\.(get|post|put|delete|patch)\(["']([^"']+)["']/g)) routes.add(`${match[2].toUpperCase()} ${match[3]}`);
+  }
+  if (/\.(test|spec)\.(ts|tsx|js|jsx)$/.test(filePath) || /(^|[\\/])tests?[\\/]/.test(filePath)) {
+    routes.add("test-file");
+  }
+  return {
+    exportedSymbols: Array.from(exportedSymbols).slice(0, 12),
+    detectedComponents: Array.from(detectedComponents).slice(0, 12),
+    functions: Array.from(functions).slice(0, 16),
+    classes: Array.from(classes).slice(0, 12),
+    imports: Array.from(imports).slice(0, 16),
+    routes: Array.from(routes).slice(0, 12),
+    testFiles: /\.(test|spec)\.(ts|tsx|js|jsx)$/.test(filePath) || /(^|[\\/])tests?[\\/]/.test(filePath) ? [filePath] : [],
+    relatedFiles: [] as string[]
+  };
 }
 
 export class ContextRetriever {
@@ -53,6 +89,7 @@ export class ContextRetriever {
       if (!fs.existsSync(absolutePath)) continue;
       const content = fs.readFileSync(absolutePath, "utf8");
       const snippet = buildSnippet(content, input.query);
+      const symbolPack = detectSymbolPack(result.path, content);
       snippets.push({
         filePath: result.path,
         text: snippet,
@@ -64,7 +101,14 @@ export class ContextRetriever {
         reason: result.summary,
         summary: summarizeText(content, 240),
         snippets: [snippet],
-        exportedSymbols: detectSymbols(result.path, content),
+        exportedSymbols: symbolPack.exportedSymbols,
+        detectedComponents: symbolPack.detectedComponents,
+        functions: symbolPack.functions,
+        classes: symbolPack.classes,
+        imports: symbolPack.imports,
+        routes: symbolPack.routes,
+        testFiles: symbolPack.testFiles,
+        relatedFiles: symbolPack.relatedFiles,
         suggestedNextRead: `Use read_file on ${result.path} if you need exact implementation details.`
       });
     }

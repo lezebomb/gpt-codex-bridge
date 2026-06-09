@@ -7,6 +7,7 @@ export const ROOT = path.resolve(process.cwd());
 export const REPO_ROOT = path.resolve(ROOT, "..");
 export const DATA_DIR = path.join(ROOT, "data");
 export const LOGS_DIR = path.join(DATA_DIR, "logs");
+export const EVENTS_DIR = path.join(DATA_DIR, "events");
 export const CONTEXT_PACKS_DIR = path.join(DATA_DIR, "context-packs");
 export const SCREENSHOTS_DIR = path.join(DATA_DIR, "screenshots");
 export const INDEXES_DIR = path.join(DATA_DIR, "indexes");

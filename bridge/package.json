@@ -21,6 +21,12 @@
     "test:node-version": "node scripts/node-version-smoke-test.mjs",
     "test:fts-queries": "node scripts/fts-safe-query-test.mjs",
     "test:patch-conflicts": "node scripts/patch-conflict-test.mjs",
+    "test:events": "node scripts/events-test.mjs",
+    "test:tool-registry": "node scripts/tool-registry-test.mjs",
+    "test:task-branch-isolation": "node scripts/task-branch-isolation-test.mjs",
+    "test:patch-preflight": "node scripts/patch-preflight-test.mjs",
+    "test:executor-cancel": "node scripts/executor-cancel-test.mjs",
+    "test:approval-policy": "node scripts/approval-policy-test.mjs",
     "test:context-budget": "node scripts/context-budget-test.mjs",
     "test:docs": "node scripts/docs-link-check.mjs",
     "ui:smoke": "playwright test --config=playwright.config.mjs"
